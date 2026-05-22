@@ -10,6 +10,9 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.conf import settings
 
+from .models import Channel, Post, Reply
+from .serializers import ReplySerializer
+
 User = get_user_model()
 
 
@@ -271,18 +274,80 @@ class ChannelListView(views.APIView):
         return Response(channels)
 
 
+# api/views.py — replace PostListView and PostCreateView
+
 class PostListView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug):
-        return Response([])
+        try:
+            channel = Channel.objects.get(slug=slug)
+        except Channel.DoesNotExist:
+            return Response({'error': 'Channel not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        posts = Post.objects.filter(channel=channel).order_by('-timestamp')
+        # Attach minimal poster info so frontend can render without a separate /me/ call
+        data = [{
+            'id': p.id,
+            'content': p.content,
+            'timestamp': p.timestamp,
+            'poster': p.author.username,
+            'media_url': request.build_absolute_uri(p.media.url) if p.media else None,
+            'media_type': (
+                'image' if p.media and p.media.name.lower().endswith(('.jpg','.jpeg','.png','.gif','.webp','.svg'))
+                else 'video' if p.media and p.media.name.lower().endswith(('.mp4','.webm','.ogg','.mov'))
+                else 'file'
+                if p.media
+                else None
+            ),
+            'replies': ReplySerializer(p.replies.all().order_by('timestamp'), many=True).data,
+        } for p in posts]
+
+        return Response(data[::-1])          # ← return chronological order (oldest → newest)
 
 
 class PostCreateView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        return Response({'status': 'created'}, status=status.HTTP_201_CREATED)
+        content = (request.data.get('content') or '').strip()
+        if not content:
+            return Response({'error': 'Post content is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            channel = Channel.objects.get(id=request.data.get('channel_id'))
+        except (Channel.DoesNotExist, ValueError):
+            return Response({'error': 'Invalid channel.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not request.user.is_admin and channel.slug != 'general':
+            return Response({'error': 'Only admins can post in this channel.'}, status=status.HTTP_403_FORBIDDEN)
+
+        post = Post.objects.create(
+            content=content,
+            author=request.user,
+            channel=channel,
+            media=request.FILES.get('file', None),
+        )
+
+        # Build the response shape the frontend expects
+        media_url = request.build_absolute_uri(post.media.url) if post.media else None
+        ext = post.media.name.lower().split('.')[-1] if post.media else ''
+        media_type = (
+            'image' if ext in ('jpg','jpeg','png','gif','webp','svg')
+            else 'video' if ext in ('mp4','webm','ogg','mov')
+            else 'file' if media_url
+            else None
+        )
+
+        return Response({
+            'id':    post.id,
+            'content': post.content,
+            'timestamp': post.timestamp.isoformat(),
+            'poster':   post.author.username,
+            'media_url': media_url,
+            'media_type': media_type,
+            'replies':   [],
+        }, status=status.HTTP_201_CREATED)
 
 
 class ReplyCreateView(views.APIView):

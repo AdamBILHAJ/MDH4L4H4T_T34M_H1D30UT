@@ -43,7 +43,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'api',
-    'channels',
+    # 'channels',   # Django Channels package not installed – removed
     'chat',
 ]
 
