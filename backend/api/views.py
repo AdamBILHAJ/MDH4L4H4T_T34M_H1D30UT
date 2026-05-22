@@ -303,7 +303,7 @@ class PostListView(views.APIView):
             'replies': ReplySerializer(p.replies.all().order_by('timestamp'), many=True).data,
         } for p in posts]
 
-        return Response(data[::-1])          # ← return chronological order (oldest → newest)
+        return Response(data)
 
 
 class PostCreateView(views.APIView):
@@ -311,8 +311,11 @@ class PostCreateView(views.APIView):
 
     def post(self, request):
         content = (request.data.get('content') or '').strip()
-        if not content:
-            return Response({'error': 'Post content is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        file = request.FILES.get('file')
+
+        # Require at least content OR file, but not both missing
+        if not content and not file:
+            return Response({'error': 'Post content or file is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             channel = Channel.objects.get(id=request.data.get('channel_id'))
