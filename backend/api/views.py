@@ -357,4 +357,19 @@ class ReplyCreateView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        return Response({'status': 'created'}, status=status.HTTP_201_CREATED)
+        post_id = request.data.get('post_id')
+        content = (request.data.get('content') or '').strip()
+        if not post_id or not content:
+            return Response({'error': 'post_id and content are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            post = Post.objects.get(id=post_id)
+        except Post.DoesNotExist:
+            return Response({'error': 'Post not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        reply = Reply.objects.create(
+            content=content,
+            author=request.user,
+            post=post,
+        )
+        return Response(ReplySerializer(reply).data, status=status.HTTP_201_CREATED)
