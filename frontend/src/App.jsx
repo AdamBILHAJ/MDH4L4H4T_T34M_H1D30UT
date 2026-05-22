@@ -1779,7 +1779,7 @@ const App = () => {
           marginBottom: '0.75rem',
         }}>
           <img
-            src="/madhalahat-logo.png"
+            src="/mdhala.jpg"
             alt="MDH4L4H4T logo"
             onError={(e) => {
               e.currentTarget.style.display = 'none';
