@@ -1730,6 +1730,8 @@ const App = () => {
   };
 
   const handleUserClick = (otherUser) => {
+    // Prevent the logged-in user from opening a chat with themselves
+  if (otherUser === user || otherUser?.id === user?.id) return;
     setActiveChat(otherUser);
     setCurrentChannel(null);
     setActiveGroupChat(false);
@@ -1756,6 +1758,7 @@ const App = () => {
           0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
           40% { transform: translateY(-5px); opacity: 1; }
         }
+        .self-entry:hover { background: transparent !important; cursor: default !important; }
       `}</style>
 
       {flash && (
@@ -1871,9 +1874,9 @@ const App = () => {
             return (
               <li
                 key={u.id}
-                className={`channel-item ${activeChat?.id === u.id ? 'active' : ''}`}
-                onClick={() => handleUserClick(u)}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', position: 'relative' }}
+                className={`channel-item ${activeChat?.id === u.id ? 'active' : ''} ${u.id === user.id ? 'self-entry' : ''}`}
+                onClick={() => { if (u.id !== user.id) handleUserClick(u); }}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', position: 'relative', cursor: u.id === user.id ? 'default' : 'pointer' }}
               >
                 <Avatar user={u} size={28} showPresence onlineUsers={onlineUsers} />
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
