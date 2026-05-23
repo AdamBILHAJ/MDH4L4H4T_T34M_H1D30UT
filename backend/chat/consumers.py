@@ -97,24 +97,55 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
             reply_to_id
         )
 
-        # Broadcast, include reply_to_id in event
+        # Look up the reply target's meta from DB so every recipient
+        # (including echo-back to the sender) gets a full content block.
+        reply_to_obj = None
+        reply_meta = None
+        if reply_to_id:
+            try:
+                # We are inside an async method; use sync-style lookup here
+                # then convert via the helper.
+                reply_to_obj = await database_sync_to_async(Message.objects.get)(id=reply_to_id)
+            except Message.DoesNotExist:
+                reply_to_obj = None
+
+            if reply_to_obj:
+                sender_user = await database_sync_to_async(
+                    lambda: User.objects.values('id', 'username', 'display_name').get(id=reply_to_obj.sender_id)
+                )()
+                reply_meta = {
+                    "reply_to_id":    reply_to_obj.id,
+                    "reply_to_sender_id":    sender_user['id'],
+                    "reply_to_sender_username": sender_user['username'],
+                    "reply_to_sender_display_name": sender_user.get('display_name') or sender_user['username'],
+                }
+
+        # Build the optional reply block to include in the broadcast
+        reply_block = {}
+        if reply_meta:
+            reply_block = reply_meta
+
+        # Broadcast, include full reply meta so every recipient (including
+        # the sender's own echo) can build the quoted-message banner from
+        # authoritative source data instead of stale local state.
         await self.channel_layer.group_send(
             self.room_group_name,
             {
-            "type": "chat_message",
-            "message_id": message.id,
-            "message": content,
-            "sender_encrypted": sender_encrypted,
-            "sender_id": self.user.id,
-            "sender_username": self.user.username,
-            "sender_display_name": self.user.display_name or self.user.username,
-            "timestamp": str(message.timestamp),
-            "file_url": None,
-            "file_name": None,
-            "file_type": None,
-            "reply_to": reply_to_id,
-        }
-    )
+                "type": "chat_message",
+                "message_id": message.id,
+                "message": content,
+                "sender_encrypted": sender_encrypted,
+                "sender_id": self.user.id,
+                "sender_username": self.user.username,
+                "sender_display_name": self.user.display_name or self.user.username,
+                "timestamp": str(message.timestamp),
+                "file_url": None,
+                "file_name": None,
+                "file_type": None,
+                "reply_to": reply_meta["reply_to_id"] if reply_meta else reply_to_id,
+                **reply_block,
+            }
+        )
 
     async def handle_file_message(self, data):
         message = await self.save_file_message(

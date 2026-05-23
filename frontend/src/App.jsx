@@ -750,11 +750,38 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
   const [replyTo, setReplyTo] = useState(null);
   const [deleteConfirmMessageId, setDeleteConfirmMessageId] = useState(null);
   const usersRef = useRef(allUsers);
+  const messagesRef = useRef([]);
 
   // Keep the ref updated with latest allUsers
   useEffect(() => {
     usersRef.current = allUsers;
   }, [allUsers]);
+
+  // Keep messages ref in sync for WS handlers
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // After decryption, attach a decrypted replied_message object
+  // so the quote banner always shows plaintext instead of ciphertext.
+  const normalizeRepliedMessages = (msgs) => {
+    const idMap = new Map(msgs.map(m => [m.id, m]));
+    return msgs.map(msg => {
+      const replyId = msg.replied_message?.id || msg.reply_to || msg.reply_to_id;
+      if (!replyId) return msg;
+      const parent = idMap.get(Number(replyId) || replyId);
+      if (!parent) return msg;
+      return {
+        ...msg,
+        replied_message: {
+          id: replyId,
+          sender_id: parent.sender_id ?? parent.sender,
+          sender_username: msg.replied_message?.sender_username || parent.sender_username || parent.sender_display_name,
+          content: parent.decrypted ?? parent.content ?? parent.message ?? '[encrypted message]',
+        }
+      };
+    });
+  };
 
   const decryptMessages = async (msgs) => {
     return Promise.all(msgs.map(async (msg) => {
@@ -811,7 +838,8 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
       try {
         const res = await axios.get(`${API_BASE}/chat/history/${otherUser.id}/`);
         const decrypted = await decryptMessages(res.data);
-        setMessages(decrypted);
+        const normalized = normalizeRepliedMessages(decrypted);
+        setMessages(normalized);
         try { await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`); } catch { }
         const sb = {};
         res.data.forEach(msg => { if (msg.seen_by?.length) sb[msg.id] = msg.seen_by; });
@@ -949,7 +977,7 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
             if (!prev[i].id && prev[i].sender_id === user.id) {
               const updated = [...prev];
               updated[i] = { ...updated[i], id: data.message_id };
-              return updated;
+              return normalizeRepliedMessages(updated);
             }
           }
           return prev;
@@ -964,7 +992,8 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
           decryptedText = '[decryption failed]';
         }
       }
-      setMessages(prev => [...prev, { ...data, id: data.message_id, decrypted: decryptedText }]);
+      const newMsg = { ...data, id: data.message_id, decrypted: decryptedText };
+      setMessages(prev => normalizeRepliedMessages([...prev, newMsg]));
 
       try {
         await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`);
@@ -1194,10 +1223,37 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
   const [replyTo, setReplyTo] = useState(null);
   const [deleteConfirmMessageId, setDeleteConfirmMessageId] = useState(null);
   const usersRef = useRef(allUsers);
+  const messagesRef = useRef([]);
 
   useEffect(() => {
     usersRef.current = allUsers;
   }, [allUsers]);
+
+  // Keep messages ref in sync for WS handlers
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // After decryption, attach a decrypted replied_message object
+  // so the quote banner always shows plaintext instead of ciphertext.
+  const normalizeRepliedMessages = (msgs) => {
+    const idMap = new Map(msgs.map(m => [m.id, m]));
+    return msgs.map(msg => {
+      const replyId = msg.replied_message?.id || msg.reply_to || msg.reply_to_id;
+      if (!replyId) return msg;
+      const parent = idMap.get(Number(replyId) || replyId);
+      if (!parent) return msg;
+      return {
+        ...msg,
+        replied_message: {
+          id: replyId,
+          sender_id: parent.sender_id ?? parent.sender,
+          sender_username: msg.replied_message?.sender_username || parent.sender_username || parent.sender_display_name,
+          content: parent.decrypted ?? parent.content ?? parent.message ?? '[encrypted message]',
+        }
+      };
+    });
+  };
 
   const handleReply = (messageId) => {
     const originalMsg = messages.find(m => m.id === messageId);
@@ -1265,7 +1321,8 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
             return { ...msg, decrypted: decryptedText };
           } catch { return { ...msg, decrypted: msg.file_url ? '' : '[encrypted message]' }; }
         }));
-        setMessages(decrypted);
+        const normalized = normalizeRepliedMessages(decrypted);
+        setMessages(normalized);
         const sb = {};
         res.data.forEach(msg => { if (msg.seen_by?.length) sb[msg.id] = msg.seen_by; });
         setSeenBy(sb);
@@ -1372,7 +1429,22 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
             for (let i = prev.length - 1; i >= 0; i--) {
               if (!prev[i].id && prev[i].sender_id === user.id) {
                 const updated = [...prev];
-                updated[i] = { ...updated[i], id: data.message_id };
+        updated[i] = {
+          ...updated[i],
+          id: data.message_id,
+          ...(data.reply_to && !updated[i].replied_message
+            ? {
+                reply_to: data.reply_to,
+                replied_message: {
+                  id: data.reply_to,
+                  sender_username: data.reply_to_sender_username || data.sender_username,
+                  content: data.reply_to_sender_display_name
+                    ? `@${data.reply_to_sender_display_name}`
+                    : `@${data.sender_username}`,
+                },
+              }
+            : {}),
+        };
                 return updated;
               }
             }
@@ -1380,7 +1452,8 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
           });
           return;
         }
-        setMessages(prev => [...prev, { ...data, id: data.message_id, decrypted: '' }]);
+        const fileMsg = { ...data, id: data.message_id, decrypted: '' };
+        setMessages(prev => normalizeRepliedMessages([...prev, fileMsg]));
         return;
       }
       if (data.type === 'delete') {
@@ -1395,7 +1468,7 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
             if (!prev[i].id && prev[i].sender_id === user.id) {
               const updated = [...prev];
               updated[i] = { ...updated[i], id: data.message_id };
-              return updated;
+              return normalizeRepliedMessages(updated);
             }
           }
           return prev;
@@ -1407,9 +1480,11 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
         const aesKeyBase64 = await decryptMessage(privateKey, keyRes.data.encrypted_key);
         const aesKey = await importAESKey(aesKeyBase64);
         const decryptedText = await decryptAES(aesKey, data.message);
-        setMessages(prev => [...prev, { ...data, id: data.message_id, decrypted: decryptedText }]);
+        const newMsg = { ...data, id: data.message_id, decrypted: decryptedText };
+        setMessages(prev => normalizeRepliedMessages([...prev, newMsg]));
       } catch {
-        setMessages(prev => [...prev, { ...data, id: data.message_id, decrypted: '[encrypted message]' }]);
+        const fallback = { ...data, id: data.message_id, decrypted: '[encrypted message]' };
+        setMessages(prev => normalizeRepliedMessages([...prev, fallback]));
       }
     };
 
