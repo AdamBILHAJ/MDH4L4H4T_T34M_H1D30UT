@@ -638,14 +638,37 @@ const ChatLayout = ({
                     {/* Show quoted message if any */}
                     {msg.replied_message && (
                       <div style={{
-                        background: 'rgba(0,0,0,0.1)',
+                        background: 'rgba(0, 0, 0, 0.08)',
                         borderLeft: '3px solid var(--primary-color)',
                         padding: '4px 8px',
-                        marginBottom: '4px',
-                        fontSize: '0.75rem',
-                        borderRadius: '4px',
+                        marginBottom: '6px',
+                        borderRadius: '6px',
+                        opacity: 0.85,
                       }}>
-                        <strong>@{msg.replied_message.sender_username}</strong> {msg.replied_message.content}
+                        <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>
+                          @{msg.replied_message.sender_username}
+                        </div>
+
+                        {msg.replied_message.file_url ? (
+                          <div style={{
+                            opacity: 0.65,
+                            filter: 'grayscale(20%)',
+                            pointerEvents: 'none',
+                            transform: 'scale(0.90)',
+                            transformOrigin: 'top left',
+                            maxWidth: '180px',
+                          }}>
+                            <FileMessage
+                              fileUrl={msg.replied_message.file_url}
+                              fileName={msg.replied_message.file_name}
+                              fileType={msg.replied_message.file_type}
+                            />
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-color)' }}>
+                            {(msg.replied_message.decrypted ?? msg.replied_message.content ?? '').substring(0, 80)}
+                          </div>
+                        )}
                       </div>
                     )}
                     {/* Main message content */}
@@ -707,7 +730,14 @@ const ChatLayout = ({
             fontSize: '0.75rem',
             borderRadius: '4px',
           }}>
-            <span>Replying to <strong>@{replyTo.sender_username}</strong>: {replyTo.decrypted || replyTo.content?.substring(0, 50)}</span>
+            <span>
+              Replying to <strong>@{replyTo.sender_username}</strong>
+              {replyTo.file_url ? (
+                <> — 📎 {replyTo.file_name || 'file'}</>
+              ) : (
+                <>: {(replyTo.decrypted || replyTo.content || '').substring(0, 55)}</>
+              )}
+            </span>
             <button onClick={cancelReply} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
           </div>
         )}
@@ -762,6 +792,38 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
     messagesRef.current = messages;
   }, [messages]);
 
+  const decryptMessages = async (msgs) => {
+    return Promise.all(msgs.map(async (msg) => {
+      const isMe = msg.sender_id === user.id;
+      const encryptedContent = isMe ? msg.sender_encrypted_content : msg.content;
+      if (!encryptedContent) return { ...msg, decrypted: msg.file_url ? '' : '[old message]' };
+      if (encryptedContent.length < 50) return { ...msg, decrypted: encryptedContent };
+      try {
+        const decrypted = await decryptMessage(privateKey, encryptedContent);
+
+        // Decrypt replied_message too (using the correct cipher variant for the replier)
+        let repliedDecrypted = '';
+        if (msg.replied_message) {
+          const rm = msg.replied_message;
+          const rmCipher = (rm.sender_id === user.id) ? rm.sender_encrypted_content : rm.content;
+          if (rmCipher) {
+            try {
+              repliedDecrypted = await decryptMessage(privateKey, rmCipher);
+            } catch { repliedDecrypted = ''; }
+          }
+        }
+
+        return {
+          ...msg,
+          decrypted,
+          replied_message: msg.replied_message ? { ...msg.replied_message, decrypted: repliedDecrypted } : null,
+        };
+      } catch {
+        return { ...msg, decrypted: '[decryption failed]' };
+      }
+    }));
+  };
+
   // After decryption, attach a decrypted replied_message object
   // so the quote banner always shows plaintext instead of ciphertext.
   const normalizeRepliedMessages = (msgs) => {
@@ -771,31 +833,23 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
       if (!replyId) return msg;
       const parent = idMap.get(Number(replyId) || replyId);
       if (!parent) return msg;
+      const baseReplied = msg.replied_message || {};
       return {
         ...msg,
         replied_message: {
+          ...baseReplied,
           id: replyId,
-          sender_id: parent.sender_id ?? parent.sender,
-          sender_username: msg.replied_message?.sender_username || parent.sender_username || parent.sender_display_name,
-          content: parent.decrypted ?? parent.content ?? parent.message ?? '[encrypted message]',
+          sender_id: baseReplied.sender_id ?? parent.sender_id ?? parent.sender,
+          sender_username: baseReplied.sender_username || parent.sender_username || parent.sender_display_name,
+          // prefer parent's decrypted (populated for both private+group), fall back to any provided content
+          content: parent.decrypted ?? baseReplied.decrypted ?? baseReplied.content ?? parent.content ?? '',
+          decrypted: parent.decrypted ?? baseReplied.decrypted ?? baseReplied.content ?? '',
+          file_url: baseReplied.file_url ?? parent.file_url ?? null,
+          file_name: baseReplied.file_name ?? parent.file_name ?? null,
+          file_type: baseReplied.file_type ?? parent.file_type ?? null,
         }
       };
     });
-  };
-
-  const decryptMessages = async (msgs) => {
-    return Promise.all(msgs.map(async (msg) => {
-      const isMe = msg.sender_id === user.id;
-      const encryptedContent = isMe ? msg.sender_encrypted_content : msg.content;
-      if (!encryptedContent) return { ...msg, decrypted: msg.file_url ? '' : '[old message]' };
-      if (encryptedContent.length < 50) return { ...msg, decrypted: encryptedContent };
-      try {
-        const decrypted = await decryptMessage(privateKey, encryptedContent);
-        return { ...msg, decrypted };
-      } catch {
-        return { ...msg, decrypted: '[decryption failed]' };
-      }
-    }));
   };
 
   const handleReply = (messageId) => {
@@ -970,6 +1024,82 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
         return;
       }
 
+      // File message (including replies) - handle specially so reply metadata works in real time
+      if (data.file_url) {
+        // Sender's own echo: just attach the real ID (avoid duplicate + wrong seen-by)
+        if (data.sender_id === user.id) {
+          setMessages(prev => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if ((prev[i].temp || !prev[i].id) && prev[i].sender_id === user.id) {
+                const updated = [...prev];
+                updated[i] = {
+                  ...updated[i],
+                  id: data.message_id,
+                  temp: false,
+                  // ensure we have the encrypted versions from server if needed
+                  content: data.message || updated[i].content,
+                  sender_encrypted_content: data.sender_encrypted || updated[i].sender_encrypted_content,
+                };
+                return normalizeRepliedMessages(updated);
+              }
+            }
+            return prev;
+          });
+          return;  // prevent fallthrough / duplicate entry
+        }
+
+        // Real incoming file message from other user
+        let fileMsg = { ...data, id: data.message_id, decrypted: '' };
+
+        // Prefer server-provided encrypted fields
+        if (data.message) fileMsg.content = data.message;
+        if (data.sender_encrypted) fileMsg.sender_encrypted_content = data.sender_encrypted;
+
+        // Decrypt the text part of the file message if present (for mixed text+file)
+        if (data.message) {
+          try {
+            fileMsg.decrypted = await decryptMessage(privateKey, data.message);
+          } catch {
+            fileMsg.decrypted = '[decryption failed]';
+          }
+        }
+
+        if (data.reply_to) {
+          // Try to get decrypted content for the quoted message from local state if available
+          const parentInState = messagesRef.current.find(m => m.id === data.reply_to);
+          const quotedContent = parentInState?.decrypted || parentInState?.content || '';
+
+          fileMsg.replied_message = {
+            id: data.reply_to,
+            sender_id: data.reply_to_sender_id,
+            sender_username: data.reply_to_sender_username,
+            content: quotedContent,
+            sender_encrypted_content: data.sender_encrypted, // may not be for the replied
+            file_url: data.reply_to_file_url,
+            file_name: data.reply_to_file_name,
+            file_type: data.reply_to_file_type,
+          };
+          // Decrypt the replied using correct variant (now that reply meta arrives via forwarded fields)
+          try {
+            const rm = fileMsg.replied_message;
+            const rmCipher = (rm.sender_id === user.id) ? rm.sender_encrypted_content : rm.content;
+            if (rmCipher) fileMsg.replied_message.decrypted = await decryptMessage(privateKey, rmCipher);
+          } catch { fileMsg.replied_message.decrypted = ''; }
+        }
+
+        setMessages(prev => normalizeRepliedMessages([...prev, fileMsg]));
+
+        // Mark as seen only for messages from others
+        try {
+          await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`);
+          if (socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({ type: 'seen', message_id: data.message_id || data.id }));
+          }
+        } catch { }
+
+        return;
+      }
+
       // Regular message
       if (data.sender_id === user.id) {
         setMessages(prev => {
@@ -1103,32 +1233,72 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
   };
 
   const sendFile = async (file) => {
+    const text = input.trim();
     const formData = new FormData();
     formData.append('file', file);
     formData.append('receiver_id', otherUser.id);
     formData.append('group', 'false');
+
+    let encryptedForReceiver = '';
+    let encryptedForSender = '';
+    let plainTextForOptimistic = text;
+
+    if (text && receiverPublicKeyRef.current) {
+      try {
+        encryptedForReceiver = await encryptMessage(receiverPublicKeyRef.current, text);
+        const ownPublicKey = await getOwnPublicKey(user.id);
+        encryptedForSender = ownPublicKey ? await encryptMessage(ownPublicKey, text) : '';
+      } catch (e) {
+        console.error('Failed to encrypt text for file message', e);
+      }
+    }
+
     try {
       const res = await axios.post(`${API_BASE}/chat/upload/`, formData);
-      const { file_url, file_name, file_type, message_id } = res.data;
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
-          type: 'file',
-          file_url: file_url,
-          file_name,
-          file_type,
-          message_id,
-          file_path: res.data.file_path,
-        }));
-      }
-      setMessages(prev => [...prev, {
-        sender_id: user.id,
-        sender_username: user.username,
-        decrypted: '',
+      const { file_url, file_name, file_type } = res.data;
+
+      const payload = {
+        type: 'file',
         file_url,
         file_name,
         file_type,
-        timestamp: new Date().toISOString()
+        file_path: res.data.file_path,
+        message: encryptedForReceiver || undefined,           // encrypted for receiver (if text present)
+        sender_encrypted: encryptedForSender || undefined,   // encrypted for sender
+        text: text || undefined,                             // keep for backward / mixed
+      };
+      if (replyTo) payload.reply_to = replyTo.id;
+
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify(payload));
+      }
+
+      const tempId = `temp-${Date.now()}`;
+      setMessages(prev => [...prev, {
+        id: tempId,
+        temp: true,
+        sender_id: user.id,
+        sender_username: user.username,
+        decrypted: plainTextForOptimistic,
+        file_url,
+        file_name,
+        file_type,
+        timestamp: new Date().toISOString(),
+        sender_encrypted_content: encryptedForSender || undefined,
+        content: encryptedForReceiver || undefined,
+        reply_to: replyTo ? replyTo.id : null,
+        replied_message: replyTo ? {
+          id: replyTo.id,
+          sender_username: replyTo.sender_username || replyTo.sender_display_name,
+          content: replyTo.decrypted || replyTo.content || '',
+          file_url: replyTo.file_url || null,
+          file_name: replyTo.file_name || null,
+          file_type: replyTo.file_type || null,
+        } : null,
       }]);
+
+      setInput('');
+      setReplyTo(null);
     } catch (err) {
       console.error('File upload failed:', err);
       alert('File upload failed.');
@@ -1243,13 +1413,19 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
       if (!replyId) return msg;
       const parent = idMap.get(Number(replyId) || replyId);
       if (!parent) return msg;
+      const baseReplied = msg.replied_message || {};
       return {
         ...msg,
         replied_message: {
+          ...baseReplied,
           id: replyId,
-          sender_id: parent.sender_id ?? parent.sender,
-          sender_username: msg.replied_message?.sender_username || parent.sender_username || parent.sender_display_name,
-          content: parent.decrypted ?? parent.content ?? parent.message ?? '[encrypted message]',
+          sender_id: baseReplied.sender_id ?? parent.sender_id ?? parent.sender,
+          sender_username: baseReplied.sender_username || parent.sender_username || parent.sender_display_name,
+          content: parent.decrypted ?? baseReplied.decrypted ?? baseReplied.content ?? parent.content ?? '',
+          decrypted: parent.decrypted ?? baseReplied.decrypted ?? baseReplied.content ?? '',
+          file_url: baseReplied.file_url ?? parent.file_url ?? null,
+          file_name: baseReplied.file_name ?? parent.file_name ?? null,
+          file_type: baseReplied.file_type ?? parent.file_type ?? null,
         }
       };
     });
@@ -1425,26 +1601,33 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
 
       if (data.type === 'file') {
         if (data.sender_id === user.id) {
+          // Sender echo replacement - clean optimistic update using server reply metadata
           setMessages(prev => {
             for (let i = prev.length - 1; i >= 0; i--) {
               if (!prev[i].id && prev[i].sender_id === user.id) {
                 const updated = [...prev];
-        updated[i] = {
-          ...updated[i],
-          id: data.message_id,
-          ...(data.reply_to && !updated[i].replied_message
-            ? {
-                reply_to: data.reply_to,
-                replied_message: {
-                  id: data.reply_to,
-                  sender_username: data.reply_to_sender_username || data.sender_username,
-                  content: data.reply_to_sender_display_name
-                    ? `@${data.reply_to_sender_display_name}`
-                    : `@${data.sender_username}`,
-                },
-              }
-            : {}),
-        };
+                const optimistic = { ...updated[i] };
+
+                updated[i] = {
+                  ...optimistic,
+                  id: data.message_id,
+                };
+
+                // If this was a reply, ensure we have a proper replied_message (use plaintext from payload if sent by us)
+                if (data.reply_to) {
+                  updated[i].reply_to = data.reply_to;
+                  updated[i].replied_message = {
+                    id: data.reply_to,
+                    sender_id: data.reply_to_sender_id,
+                    sender_username: data.reply_to_sender_username || data.sender_username,
+                    content: data.reply_to_content || '',
+                    decrypted: data.reply_to_content || '',
+                    file_url: data.reply_to_file_url || null,
+                    file_name: data.reply_to_file_name || null,
+                    file_type: data.reply_to_file_type || null,
+                  };
+                }
+
                 return updated;
               }
             }
@@ -1452,7 +1635,23 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
           });
           return;
         }
-        const fileMsg = { ...data, id: data.message_id, decrypted: '' };
+
+        // Receiver path - build replied_message from server-provided flat fields (Fix for live quotes on file replies)
+        let fileMsg = { ...data, id: data.message_id, decrypted: '' };
+
+        if (data.reply_to) {
+          fileMsg.replied_message = {
+            id: data.reply_to,
+            sender_id: data.reply_to_sender_id,
+            sender_username: data.reply_to_sender_username,
+            content: data.reply_to_content || '',
+            decrypted: data.reply_to_content || '',
+            file_url: data.reply_to_file_url || null,
+            file_name: data.reply_to_file_name || null,
+            file_type: data.reply_to_file_type || null,
+          };
+        }
+
         setMessages(prev => normalizeRepliedMessages([...prev, fileMsg]));
         return;
       }
@@ -1481,9 +1680,33 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
         const aesKey = await importAESKey(aesKeyBase64);
         const decryptedText = await decryptAES(aesKey, data.message);
         const newMsg = { ...data, id: data.message_id, decrypted: decryptedText };
+        if (data.reply_to) {
+          newMsg.replied_message = {
+            id: data.reply_to,
+            sender_id: data.reply_to_sender_id,
+            sender_username: data.reply_to_sender_username,
+            content: data.reply_to_content || '',
+            decrypted: data.reply_to_content || '',
+            file_url: data.reply_to_file_url || null,
+            file_name: data.reply_to_file_name || null,
+            file_type: data.reply_to_file_type || null,
+          };
+        }
         setMessages(prev => normalizeRepliedMessages([...prev, newMsg]));
       } catch {
         const fallback = { ...data, id: data.message_id, decrypted: '[encrypted message]' };
+        if (data.reply_to) {
+          fallback.replied_message = {
+            id: data.reply_to,
+            sender_id: data.reply_to_sender_id,
+            sender_username: data.reply_to_sender_username,
+            content: data.reply_to_content || '',
+            decrypted: data.reply_to_content || '',
+            file_url: data.reply_to_file_url || null,
+            file_name: data.reply_to_file_name || null,
+            file_type: data.reply_to_file_type || null,
+          };
+        }
         setMessages(prev => normalizeRepliedMessages([...prev, fallback]));
       }
     };
@@ -1553,6 +1776,7 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
     const payload = { type: 'message', message: encryptedMessage, encrypted_keys: encryptedKeys };
     if (replyTo) {
       payload.reply_to = replyTo.id;
+      payload.reply_to_content = replyTo.decrypted || replyTo.content || '';
     }
     socketRef.current.send(JSON.stringify(payload));
     isTypingRef.current = false;
@@ -1577,21 +1801,50 @@ const GroupChat = ({ user, privateKey, allUsers, onlineUsers }) => {
   };
 
   const sendFile = async (file) => {
+    const text = input.trim();
     const formData = new FormData();
     formData.append('file', file);
     formData.append('group', 'true');
     try {
       const res = await axios.post(`${API_BASE}/chat/upload/`, formData);
-      const { file_url, file_name, file_type, message_id } = res.data;
-      socketRef.current?.send(JSON.stringify({
+      const { file_url, file_name, file_type } = res.data;
+
+      const payload = {
         type: 'file',
         file_url,
         file_name,
         file_type,
-        message_id,
         file_path: res.data.file_path,
-      }));
-      setMessages(prev => [...prev, { sender_id: user.id, sender_username: user.display_name || user.username, decrypted: '', file_url, file_name, file_type, timestamp: new Date().toISOString() }]);
+        text: text || undefined,
+      };
+      if (replyTo) {
+        payload.reply_to = replyTo.id;
+        payload.reply_to_content = replyTo.decrypted || replyTo.content || '';
+      }
+
+      socketRef.current?.send(JSON.stringify(payload));
+
+      setMessages(prev => [...prev, {
+        sender_id: user.id,
+        sender_username: user.display_name || user.username,
+        decrypted: text,
+        file_url,
+        file_name,
+        file_type,
+        timestamp: new Date().toISOString(),
+        reply_to: replyTo ? replyTo.id : null,
+        replied_message: replyTo ? {
+          id: replyTo.id,
+          sender_username: replyTo.sender_username || replyTo.sender_display_name,
+          content: replyTo.decrypted || replyTo.content || '',
+          file_url: replyTo.file_url || null,
+          file_name: replyTo.file_name || null,
+          file_type: replyTo.file_type || null,
+        } : null,
+      }]);
+
+      setInput('');
+      setReplyTo(null);
     } catch { alert('File upload failed.'); }
   };
 
