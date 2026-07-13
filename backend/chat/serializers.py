@@ -53,7 +53,10 @@ class MessageSerializer(serializers.ModelSerializer):
                 'sender_id': obj.reply_to.sender.id,
                 'sender_username': obj.reply_to.sender.username,
                 'content': obj.reply_to.content,
+                'sender_encrypted_content': getattr(obj.reply_to, 'sender_encrypted_content', None),
                 'file_url': obj.reply_to.file.url if obj.reply_to.file else None,
+                'file_name': obj.reply_to.file_name,
+                'file_type': obj.reply_to.file_type,
             }
         return None
     
@@ -135,7 +138,10 @@ class GroupMessageSerializer(serializers.ModelSerializer):
                 'sender_id': obj.reply_to.sender.id,
                 'sender_username': obj.reply_to.sender.username,
                 'content': obj.reply_to.content,
+                'sender_encrypted_content': None,
                 'file_url': obj.reply_to.file.url if obj.reply_to.file else None,
+                'file_name': obj.reply_to.file_name,
+                'file_type': obj.reply_to.file_type,
             }
         return None
     

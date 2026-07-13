@@ -97,41 +97,99 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
             reply_to_id
         )
 
-        # Broadcast, include reply_to_id in event
+        # Look up the reply target's meta from DB so every recipient
+        # (including echo-back to the sender) gets a full content block.
+        reply_to_obj = None
+        reply_meta = None
+        if reply_to_id:
+            try:
+                # We are inside an async method; use sync-style lookup here
+                # then convert via the helper.
+                reply_to_obj = await database_sync_to_async(Message.objects.get)(id=reply_to_id)
+            except Message.DoesNotExist:
+                reply_to_obj = None
+
+            if reply_to_obj:
+                sender_user = await database_sync_to_async(
+                    lambda: User.objects.values('id', 'username', 'display_name').get(id=reply_to_obj.sender_id)
+                )()
+                reply_meta = {
+                    "reply_to_id":    reply_to_obj.id,
+                    "reply_to_sender_id":    sender_user['id'],
+                    "reply_to_sender_username": sender_user['username'],
+                    "reply_to_sender_display_name": sender_user.get('display_name') or sender_user['username'],
+                }
+
+        # Build the optional reply block to include in the broadcast
+        reply_block = {}
+        if reply_meta:
+            reply_block = reply_meta
+
+        # Broadcast, include full reply meta so every recipient (including
+        # the sender's own echo) can build the quoted-message banner from
+        # authoritative source data instead of stale local state.
         await self.channel_layer.group_send(
             self.room_group_name,
             {
-            "type": "chat_message",
-            "message_id": message.id,
-            "message": content,
-            "sender_encrypted": sender_encrypted,
-            "sender_id": self.user.id,
-            "sender_username": self.user.username,
-            "sender_display_name": self.user.display_name or self.user.username,
-            "timestamp": str(message.timestamp),
-            "file_url": None,
-            "file_name": None,
-            "file_type": None,
-            "reply_to": reply_to_id,
-        }
-    )
+                "type": "chat_message",
+                "message_id": message.id,
+                "message": content,
+                "sender_encrypted": sender_encrypted,
+                "sender_id": self.user.id,
+                "sender_username": self.user.username,
+                "sender_display_name": self.user.display_name or self.user.username,
+                "timestamp": str(message.timestamp),
+                "file_url": None,
+                "file_name": None,
+                "file_type": None,
+                "reply_to": reply_meta["reply_to_id"] if reply_meta else reply_to_id,
+                **reply_block,
+            }
+        )
 
     async def handle_file_message(self, data):
+        reply_to_id = data.get('reply_to')
+        text_content = data.get('text', '') or data.get('message', '')
+        sender_encrypted = data.get('sender_encrypted', '')
+
         message = await self.save_file_message(
             self.user.id,
             self.other_user_id,
             data.get('file_url'),
             data.get('file_name'),
             data.get('file_type'),
-            data.get('file_path')
+            data.get('file_path'),
+            reply_to_id,
+            text_content,
+            sender_encrypted
         )
+
+        reply_meta = None
+        if reply_to_id:
+            try:
+                reply_to_obj = await database_sync_to_async(Message.objects.get)(id=reply_to_id)
+                sender_user = await database_sync_to_async(
+                    lambda: User.objects.values('id', 'username', 'display_name').get(id=reply_to_obj.sender_id)
+                )()
+                reply_meta = {
+                    "reply_to": reply_to_obj.id,
+                    "reply_to_sender_id": sender_user['id'],
+                    "reply_to_sender_username": sender_user['username'],
+                    "reply_to_sender_display_name": sender_user.get('display_name') or sender_user['username'],
+                    "reply_to_file_url": reply_to_obj.file.url if reply_to_obj.file else None,
+                    "reply_to_file_name": reply_to_obj.file_name,
+                    "reply_to_file_type": reply_to_obj.file_type,
+                }
+            except Exception:
+                pass
 
         await self.channel_layer.group_send(
             self.room_group_name,
             {
                 "type": "chat_message",
                 "message_id": message.id,
-                "message": "",
+                "message": text_content,
+                "sender_encrypted": sender_encrypted,
                 "sender_id": self.user.id,
                 "sender_username": self.user.username,
                 "sender_display_name": self.user.display_name or self.user.username,
@@ -139,6 +197,7 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
                 "file_url": data.get('file_url'),
                 "file_name": data.get('file_name'),
                 "file_type": data.get('file_type'),
+                **(reply_meta or {}),
             }
         )
 
@@ -213,6 +272,11 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
         is_sender = event["sender_id"] == self.user.id
         message_content = event.get("sender_encrypted", event["message"]) if is_sender else event["message"]
 
+        # Forward any reply metadata (including client-provided reply_to_content for group, or encrypted for DM)
+        reply_fields = {}
+        for k in ['reply_to', 'reply_to_id', 'reply_to_sender_id', 'reply_to_sender_username', 'reply_to_sender_display_name', 'reply_to_file_url', 'reply_to_file_name', 'reply_to_file_type', 'reply_to_content']:
+            if k in event:
+                reply_fields[k] = event[k]
         await self.send(text_data=json.dumps({
             "message_id": event["message_id"],
             "message": message_content,
@@ -223,6 +287,7 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
             "file_url": event.get("file_url"),
             "file_name": event.get("file_name"),
             "file_type": event.get("file_type"),
+            **reply_fields,
         }))
 
     async def typing_event(self, event):
@@ -303,18 +368,29 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
         return message
 
     @database_sync_to_async
-    def save_file_message(self, sender_id, receiver_id, file_url, file_name, file_type, file_path):
+    def save_file_message(self, sender_id, receiver_id, file_url, file_name, file_type, file_path,
+                          reply_to_id=None, text_content="", sender_encrypted_content=""):
         Message.objects.filter(expires_at__lt=timezone.now()).delete()
         sender = User.objects.get(id=sender_id)
         receiver = User.objects.get(id=receiver_id)
+
+        reply_to = None
+        if reply_to_id:
+            try:
+                reply_to = Message.objects.get(id=reply_to_id)
+            except Message.DoesNotExist:
+                pass
+
         message = Message.objects.create(
             sender=sender,
             receiver=receiver,
-            content="",
+            content=text_content,
+            sender_encrypted_content=sender_encrypted_content,
             file=file_path,
             file_name=file_name,
             file_type=file_type,
-            expires_at=timezone.now() + timedelta(hours=48)
+            expires_at=timezone.now() + timedelta(hours=48),
+            reply_to=reply_to
         )
         return message
 
@@ -421,37 +497,82 @@ class GroupChatConsumer(AsyncWebsocketConsumer):
         reply_to_id
     )
 
-        await self.channel_layer.group_send(
-        self.room_group_name,
-        {
-            "type": "chat_message",
-            "message_id": message.id,
-            "message": content,
-            "sender_id": self.user.id,
-            "sender_username": self.user.username,
-            "sender_display_name": self.user.display_name or self.user.username,
-            "timestamp": str(message.timestamp),
-            "file_url": None,
-            "file_name": None,
-            "file_type": None,
-            "reply_to": reply_to_id,
-        }
-    )
-    async def handle_file_message(self, data):
-        message = await self.save_group_file_message(
-            self.user.id,
-            data.get('file_url'),
-            data.get('file_name'),
-            data.get('file_type'),
-            data.get('file_path')
-        )
+        reply_meta = None
+        if reply_to_id:
+            try:
+                reply_to_obj = await database_sync_to_async(GroupMessage.objects.get)(id=reply_to_id)
+                sender_user = await database_sync_to_async(
+                    lambda: User.objects.values('id', 'username', 'display_name').get(id=reply_to_obj.sender_id)
+                )()
+                reply_meta = {
+                    "reply_to": reply_to_obj.id,
+                    "reply_to_sender_id": sender_user['id'],
+                    "reply_to_sender_username": sender_user['username'],
+                    "reply_to_sender_display_name": sender_user.get('display_name') or sender_user['username'],
+                    "reply_to_file_url": reply_to_obj.file.url if reply_to_obj.file else None,
+                    "reply_to_file_name": reply_to_obj.file_name,
+                    "reply_to_file_type": reply_to_obj.file_type,
+                    "reply_to_content": data.get('reply_to_content', ''),  # client-provided plaintext (server has none)
+                }
+            except Exception:
+                reply_meta = {"reply_to": reply_to_id, "reply_to_content": data.get('reply_to_content', '')}
 
         await self.channel_layer.group_send(
             self.room_group_name,
             {
                 "type": "chat_message",
                 "message_id": message.id,
-                "message": "",
+                "message": content,
+                "sender_id": self.user.id,
+                "sender_username": self.user.username,
+                "sender_display_name": self.user.display_name or self.user.username,
+                "timestamp": str(message.timestamp),
+                "file_url": None,
+                "file_name": None,
+                "file_type": None,
+                **(reply_meta or {"reply_to": reply_to_id}),
+            }
+        )
+    async def handle_file_message(self, data):
+        reply_to_id = data.get('reply_to')
+        text_content = data.get('text', '') or data.get('message', '')
+
+        message = await self.save_group_file_message(
+            self.user.id,
+            data.get('file_url'),
+            data.get('file_name'),
+            data.get('file_type'),
+            data.get('file_path'),
+            reply_to_id,
+            text_content
+        )
+
+        reply_meta = None
+        if reply_to_id:
+            try:
+                reply_to_obj = await database_sync_to_async(GroupMessage.objects.get)(id=reply_to_id)
+                sender_user = await database_sync_to_async(
+                    lambda: User.objects.values('id', 'username', 'display_name').get(id=reply_to_obj.sender_id)
+                )()
+                reply_meta = {
+                    "reply_to": reply_to_obj.id,
+                    "reply_to_sender_id": sender_user['id'],
+                    "reply_to_sender_username": sender_user['username'],
+                    "reply_to_sender_display_name": sender_user.get('display_name') or sender_user['username'],
+                    "reply_to_file_url": reply_to_obj.file.url if reply_to_obj.file else None,
+                    "reply_to_file_name": reply_to_obj.file_name,
+                    "reply_to_file_type": reply_to_obj.file_type,
+                    "reply_to_content": data.get('reply_to_content', ''),  # plaintext from sender (who has it decrypted)
+                }
+            except Exception:
+                reply_meta = {"reply_to": reply_to_id, "reply_to_content": data.get('reply_to_content', '')}
+
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                "type": "chat_message",
+                "message_id": message.id,
+                "message": text_content,
                 "sender_id": self.user.id,
                 "sender_username": self.user.username,
                 "sender_display_name": self.user.display_name or self.user.username,
@@ -459,6 +580,7 @@ class GroupChatConsumer(AsyncWebsocketConsumer):
                 "file_url": data.get('file_url'),
                 "file_name": data.get('file_name'),
                 "file_type": data.get('file_type'),
+                **(reply_meta or {}),
             }
         )
     async def handle_delete(self, data):
@@ -535,6 +657,11 @@ class GroupChatConsumer(AsyncWebsocketConsumer):
     # ==================== EVENT HANDLERS ====================
 
     async def chat_message(self, event):
+        # Forward any reply metadata (populated in layer for file; will include reply_to_content when client sends it for group replies)
+        reply_fields = {}
+        for k in ['reply_to', 'reply_to_id', 'reply_to_sender_id', 'reply_to_sender_username', 'reply_to_sender_display_name', 'reply_to_file_url', 'reply_to_file_name', 'reply_to_file_type', 'reply_to_content']:
+            if k in event:
+                reply_fields[k] = event[k]
         await self.send(text_data=json.dumps({
             "message_id": event["message_id"],
             "message": event["message"],
@@ -545,6 +672,7 @@ class GroupChatConsumer(AsyncWebsocketConsumer):
             "file_url": event.get("file_url"),
             "file_name": event.get("file_name"),
             "file_type": event.get("file_type"),
+            **reply_fields,
         }))
 
     async def typing_event(self, event):
@@ -637,16 +765,26 @@ class GroupChatConsumer(AsyncWebsocketConsumer):
         return message
 
     @database_sync_to_async
-    def save_group_file_message(self, sender_id, file_url, file_name, file_type, file_path):
+    def save_group_file_message(self, sender_id, file_url, file_name, file_type, file_path,
+                                reply_to_id=None, text_content=""):
         GroupMessage.objects.filter(expires_at__lt=timezone.now()).delete()
         sender = User.objects.get(id=sender_id)
+
+        reply_to = None
+        if reply_to_id:
+            try:
+                reply_to = GroupMessage.objects.get(id=reply_to_id)
+            except GroupMessage.DoesNotExist:
+                pass
+
         message = GroupMessage.objects.create(
             sender=sender,
-            content="",
+            content=text_content,
             file=file_path,
             file_name=file_name,
             file_type=file_type,
-            expires_at=timezone.now() + timedelta(hours=48)
+            expires_at=timezone.now() + timedelta(hours=48),
+            reply_to=reply_to
         )
         return message
 
