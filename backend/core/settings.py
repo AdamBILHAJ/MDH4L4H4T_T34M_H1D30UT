@@ -37,6 +37,12 @@ DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 3600  # start low, raise to 31536000 once confirmed working
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 # Application definition
 
