@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: mdhalahat-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate
+    startCommand: daphne -b 0.0.0.0 -p $PORT core.asgi:application
+    healthCheckPath: /api/me/
+    envVars:
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mdhalahat-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: mdhalahat-redis
+          property: connectionString
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://your-frontend.vercel.app
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://your-frontend.vercel.app
+      - key: ALLOWED_HOSTS
+        value: your-app.onrender.com
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+
+databases:
+  - name: mdhalahat-db
+    databaseName: mdhalahat
+    plan: free
+
+redis:
+  - name: mdhalahat-redis
+    plan: free
