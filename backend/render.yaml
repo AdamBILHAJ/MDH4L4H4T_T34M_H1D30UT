@@ -23,13 +23,13 @@ services:
         value: https://your-frontend.vercel.app
       - key: ALLOWED_HOSTS
         value: your-app.onrender.com
-      - key: R2_BUCKET
+      - key: MEDIA_BUCKET
         sync: false
-      - key: R2_ACCESS_KEY_ID
+      - key: MEDIA_ACCESS_KEY_ID
         sync: false
-      - key: R2_SECRET_ACCESS_KEY
+      - key: MEDIA_SECRET_ACCESS_KEY
         sync: false
-      - key: R2_ENDPOINT
+      - key: MEDIA_ENDPOINT_URL
         sync: false
 
 databases:
