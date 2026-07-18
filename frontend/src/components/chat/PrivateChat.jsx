@@ -17,6 +17,7 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
   const isTypingRef = useRef(false);
   const [replyTo, setReplyTo] = useState(null);
   const [deleteConfirmMessageId, setDeleteConfirmMessageId] = useState(null);
+  const [reconnecting, setReconnecting] = useState(false);
   const usersRef = useRef(allUsers);
   const messagesRef = useRef([]);
 
@@ -148,118 +149,202 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
 
   useEffect(() => {
     const token = getAccessToken();
-    const socket = new WebSocket(`${WS_BASE}/${otherUser.id}/?token=${token}`);
-    socketRef.current = socket;
+    let reconnectTimer = null;
+    let retries = 0;
+    let closed = false;
 
-    socket.onmessage = async (e) => {
-      const data = JSON.parse(e.data);
-      console.log('📨 WebSocket message received:', data);
+    const connect = () => {
+      closed = false;
+      const socket = new WebSocket(`${WS_BASE}/${otherUser.id}/?token=${token}`);
+      socketRef.current = socket;
 
-      if (data.type === 'typing_start') {
-        if (data.sender_id !== user.id) {
-          setTypingUsers(prev => prev.includes(data.sender_id) ? prev : [...prev, data.sender_id]);
+      socket.onopen = async () => {
+        const wasReconnected = retries > 0;
+        retries = 0;
+        setReconnecting(false);
+        if (wasReconnected) {
+          try {
+            const res = await axios.get(`${API_BASE}/chat/history/${otherUser.id}/`);
+            const decrypted = await decryptMessages(res.data);
+            const normalized = normalizeRepliedMessages(decrypted);
+            setMessages(normalized);
+            try { await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`); } catch { }
+            const sb = {};
+            res.data.forEach(msg => { if (msg.seen_by?.length) sb[msg.id] = msg.seen_by; });
+            setSeenBy(sb);
+          } catch (err) { console.error('Failed to re-fetch history on reconnect', err); }
         }
-        return;
-      }
-      if (data.type === 'typing_stop') {
-        if (data.sender_id !== user.id) {
-          setTypingUsers(prev => prev.filter(id => id !== data.sender_id));
-        }
-        return;
-      }
+      };
 
-      if (data.type === 'seen') {
-        const seenUser = (usersRef.current.find(u => u.id === data.user_id)) || { id: data.user_id, username: data.username };
-        setSeenBy(prev => {
-          const updated = { ...prev };
-          if (!updated[data.message_id]) updated[data.message_id] = [];
-          if (!updated[data.message_id].find(u => u.id === data.user_id)) {
-            updated[data.message_id] = [...updated[data.message_id], seenUser];
+      socket.onmessage = async (e) => {
+        const data = JSON.parse(e.data);
+        console.log('📨 WebSocket message received:', data);
+
+        if (data.type === 'typing_start') {
+          if (data.sender_id !== user.id) {
+            setTypingUsers(prev => prev.includes(data.sender_id) ? prev : [...prev, data.sender_id]);
           }
-          return updated;
-        });
-        return;
-      }
+          return;
+        }
+        if (data.type === 'typing_stop') {
+          if (data.sender_id !== user.id) {
+            setTypingUsers(prev => prev.filter(id => id !== data.sender_id));
+          }
+          return;
+        }
 
-      if (data.type === 'reaction') {
-        console.log('🔔 Reaction WebSocket received:', data);
-        setMessages(prev => {
-          const updated = prev.map(m => {
-            if (m.id !== data.message_id) return m;
-            const reactions = {};
-            for (const [emoji, reactionData] of Object.entries(m.reactions || {})) {
-              reactions[emoji] = {
-                count: reactionData.count,
-                users: [...reactionData.users],
-                reacted: reactionData.reacted
-              };
+        if (data.type === 'seen') {
+          const seenUser = (usersRef.current.find(u => u.id === data.user_id)) || { id: data.user_id, username: data.username };
+          setSeenBy(prev => {
+            const updated = { ...prev };
+            if (!updated[data.message_id]) updated[data.message_id] = [];
+            if (!updated[data.message_id].find(u => u.id === data.user_id)) {
+              updated[data.message_id] = [...updated[data.message_id], seenUser];
             }
-            const emoji = data.emoji;
-            const reactingUser = usersRef.current.find(u => u.id === data.user_id) || {
-              id: data.user_id,
-              username: data.username || data.display_name || 'Unknown',
-              display_name: data.display_name
-            };
-            if (data.action === 'add') {
-              let existingEmoji = null;
-              for (const [e, r] of Object.entries(reactions)) {
-                if (r.users.some(u => u.id === data.user_id)) {
-                  existingEmoji = e;
-                  break;
+            return updated;
+          });
+          return;
+        }
+
+        if (data.type === 'reaction') {
+          console.log('🔔 Reaction WebSocket received:', data);
+          setMessages(prev => {
+            const updated = prev.map(m => {
+              if (m.id !== data.message_id) return m;
+              const reactions = {};
+              for (const [emoji, reactionData] of Object.entries(m.reactions || {})) {
+                reactions[emoji] = {
+                  count: reactionData.count,
+                  users: [...reactionData.users],
+                  reacted: reactionData.reacted
+                };
+              }
+              const emoji = data.emoji;
+              const reactingUser = usersRef.current.find(u => u.id === data.user_id) || {
+                id: data.user_id,
+                username: data.username || data.display_name || 'Unknown',
+                display_name: data.display_name
+              };
+              if (data.action === 'add') {
+                let existingEmoji = null;
+                for (const [e, r] of Object.entries(reactions)) {
+                  if (r.users.some(u => u.id === data.user_id)) {
+                    existingEmoji = e;
+                    break;
+                  }
+                }
+                if (existingEmoji && existingEmoji !== emoji) {
+                  reactions[existingEmoji] = {
+                    ...reactions[existingEmoji],
+                    count: reactions[existingEmoji].count - 1,
+                    users: reactions[existingEmoji].users.filter(u => u.id !== data.user_id),
+                    reacted: reactions[existingEmoji].reacted && data.user_id === user.id ? false : reactions[existingEmoji].reacted
+                  };
+                  if (reactions[existingEmoji].count === 0) delete reactions[existingEmoji];
+                }
+                if (!reactions[emoji]) reactions[emoji] = { count: 0, users: [], reacted: false };
+                reactions[emoji] = {
+                  count: reactions[emoji].count + 1,
+                  users: [...reactions[emoji].users, reactingUser],
+                  reacted: reactions[emoji].reacted || (reactingUser.id === user.id)
+                };
+              } else {
+                if (reactions[emoji]) {
+                  reactions[emoji] = {
+                    ...reactions[emoji],
+                    count: reactions[emoji].count - 1,
+                    users: reactions[emoji].users.filter(u => u.id !== data.user_id),
+                    reacted: reactions[emoji].reacted && data.user_id === user.id ? false : reactions[emoji].reacted
+                  };
+                  if (reactions[emoji].count === 0) delete reactions[emoji];
                 }
               }
-              if (existingEmoji && existingEmoji !== emoji) {
-                reactions[existingEmoji] = {
-                  ...reactions[existingEmoji],
-                  count: reactions[existingEmoji].count - 1,
-                  users: reactions[existingEmoji].users.filter(u => u.id !== data.user_id),
-                  reacted: reactions[existingEmoji].reacted && data.user_id === user.id ? false : reactions[existingEmoji].reacted
-                };
-                if (reactions[existingEmoji].count === 0) delete reactions[existingEmoji];
-              }
-              if (!reactions[emoji]) reactions[emoji] = { count: 0, users: [], reacted: false };
-              reactions[emoji] = {
-                count: reactions[emoji].count + 1,
-                users: [...reactions[emoji].users, reactingUser],
-                reacted: reactions[emoji].reacted || (reactingUser.id === user.id)
-              };
-            } else {
-              if (reactions[emoji]) {
-                reactions[emoji] = {
-                  ...reactions[emoji],
-                  count: reactions[emoji].count - 1,
-                  users: reactions[emoji].users.filter(u => u.id !== data.user_id),
-                  reacted: reactions[emoji].reacted && data.user_id === user.id ? false : reactions[emoji].reacted
-                };
-                if (reactions[emoji].count === 0) delete reactions[emoji];
-              }
-            }
-            return { ...m, reactions };
+              return { ...m, reactions };
+            });
+            return updated;
           });
-          return updated;
-        });
-        return;
-      }
+          return;
+        }
 
-      if (data.type === 'delete') {
-        setMessages(prev => prev.filter(m => (m.id !== data.message_id && m.message_id !== data.message_id)));
-        setDeleteConfirmMessageId(null);
-        return;
-      }
+        if (data.type === 'delete') {
+          setMessages(prev => prev.filter(m => (m.id !== data.message_id && m.message_id !== data.message_id)));
+          setDeleteConfirmMessageId(null);
+          return;
+        }
 
-      if (data.file_url) {
+        if (data.file_url) {
+          if (data.sender_id === user.id) {
+            setMessages(prev => {
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if ((prev[i].temp || !prev[i].id) && prev[i].sender_id === user.id) {
+                  const updated = [...prev];
+                  updated[i] = {
+                    ...updated[i],
+                    id: data.message_id,
+                    temp: false,
+                    content: data.message || updated[i].content,
+                    sender_encrypted_content: data.sender_encrypted || updated[i].sender_encrypted_content,
+                  };
+                  return normalizeRepliedMessages(updated);
+                }
+              }
+              return prev;
+            });
+            return;
+          }
+
+          let fileMsg = { ...data, id: data.message_id, decrypted: '' };
+
+          if (data.message) fileMsg.content = data.message;
+          if (data.sender_encrypted) fileMsg.sender_encrypted_content = data.sender_encrypted;
+
+          if (data.message) {
+            try {
+              fileMsg.decrypted = await decryptMessage(privateKey, data.message);
+            } catch {
+              fileMsg.decrypted = '[decryption failed]';
+            }
+          }
+
+          if (data.reply_to) {
+            const parentInState = messagesRef.current.find(m => m.id === data.reply_to);
+            const quotedContent = parentInState?.decrypted || parentInState?.content || '';
+
+            fileMsg.replied_message = {
+              id: data.reply_to,
+              sender_id: data.reply_to_sender_id,
+              sender_username: data.reply_to_sender_username,
+              content: quotedContent,
+              sender_encrypted_content: data.sender_encrypted,
+              file_url: data.reply_to_file_url,
+              file_name: data.reply_to_file_name,
+              file_type: data.reply_to_file_type,
+            };
+            try {
+              const rm = fileMsg.replied_message;
+              const rmCipher = (rm.sender_id === user.id) ? rm.sender_encrypted_content : rm.content;
+              if (rmCipher) fileMsg.replied_message.decrypted = await decryptMessage(privateKey, rmCipher);
+            } catch { fileMsg.replied_message.decrypted = ''; }
+          }
+
+          setMessages(prev => normalizeRepliedMessages([...prev, fileMsg]));
+
+          try {
+            await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`);
+            if (socketRef.current?.readyState === WebSocket.OPEN) {
+              socketRef.current.send(JSON.stringify({ type: 'seen', message_id: data.message_id || data.id }));
+            }
+          } catch { }
+
+          return;
+        }
+
         if (data.sender_id === user.id) {
           setMessages(prev => {
             for (let i = prev.length - 1; i >= 0; i--) {
-              if ((prev[i].temp || !prev[i].id) && prev[i].sender_id === user.id) {
+              if (!prev[i].id && prev[i].sender_id === user.id) {
                 const updated = [...prev];
-                updated[i] = {
-                  ...updated[i],
-                  id: data.message_id,
-                  temp: false,
-                  content: data.message || updated[i].content,
-                  sender_encrypted_content: data.sender_encrypted || updated[i].sender_encrypted_content,
-                };
+                updated[i] = { ...updated[i], id: data.message_id };
                 return normalizeRepliedMessages(updated);
               }
             }
@@ -267,42 +352,16 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
           });
           return;
         }
-
-        let fileMsg = { ...data, id: data.message_id, decrypted: '' };
-
-        if (data.message) fileMsg.content = data.message;
-        if (data.sender_encrypted) fileMsg.sender_encrypted_content = data.sender_encrypted;
-
+        let decryptedText = '';
         if (data.message) {
           try {
-            fileMsg.decrypted = await decryptMessage(privateKey, data.message);
+            decryptedText = await decryptMessage(privateKey, data.message);
           } catch {
-            fileMsg.decrypted = '[decryption failed]';
+            decryptedText = '[decryption failed]';
           }
         }
-
-        if (data.reply_to) {
-          const parentInState = messagesRef.current.find(m => m.id === data.reply_to);
-          const quotedContent = parentInState?.decrypted || parentInState?.content || '';
-
-          fileMsg.replied_message = {
-            id: data.reply_to,
-            sender_id: data.reply_to_sender_id,
-            sender_username: data.reply_to_sender_username,
-            content: quotedContent,
-            sender_encrypted_content: data.sender_encrypted,
-            file_url: data.reply_to_file_url,
-            file_name: data.reply_to_file_name,
-            file_type: data.reply_to_file_type,
-          };
-          try {
-            const rm = fileMsg.replied_message;
-            const rmCipher = (rm.sender_id === user.id) ? rm.sender_encrypted_content : rm.content;
-            if (rmCipher) fileMsg.replied_message.decrypted = await decryptMessage(privateKey, rmCipher);
-          } catch { fileMsg.replied_message.decrypted = ''; }
-        }
-
-        setMessages(prev => normalizeRepliedMessages([...prev, fileMsg]));
+        const newMsg = { ...data, id: data.message_id, decrypted: decryptedText };
+        setMessages(prev => normalizeRepliedMessages([...prev, newMsg]));
 
         try {
           await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`);
@@ -310,44 +369,27 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
             socketRef.current.send(JSON.stringify({ type: 'seen', message_id: data.message_id || data.id }));
           }
         } catch { }
+      };
 
-        return;
-      }
+      socket.onerror = (err) => console.error('WebSocket error', err);
 
-      if (data.sender_id === user.id) {
-        setMessages(prev => {
-          for (let i = prev.length - 1; i >= 0; i--) {
-            if (!prev[i].id && prev[i].sender_id === user.id) {
-              const updated = [...prev];
-              updated[i] = { ...updated[i], id: data.message_id };
-              return normalizeRepliedMessages(updated);
-            }
-          }
-          return prev;
-        });
-        return;
-      }
-      let decryptedText = '';
-      if (data.message) {
-        try {
-          decryptedText = await decryptMessage(privateKey, data.message);
-        } catch {
-          decryptedText = '[decryption failed]';
-        }
-      }
-      const newMsg = { ...data, id: data.message_id, decrypted: decryptedText };
-      setMessages(prev => normalizeRepliedMessages([...prev, newMsg]));
-
-      try {
-        await axios.post(`${API_BASE}/chat/seen/${otherUser.id}/`);
-        if (socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({ type: 'seen', message_id: data.message_id || data.id }));
-        }
-      } catch { }
+      socket.onclose = () => {
+        if (closed) return;
+        const delay = Math.min(1000 * Math.pow(2, retries), 30000);
+        retries++;
+        setReconnecting(true);
+        reconnectTimer = setTimeout(connect, delay);
+      };
     };
 
-    socket.onerror = (err) => console.error('WebSocket error', err);
-    return () => { socket.close(); clearTimeout(typingTimerRef.current); };
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      socketRef.current?.close();
+      clearTimeout(typingTimerRef.current);
+    };
   }, [otherUser.id, user.id, privateKey]);
 
   const emitTyping = useCallback(() => {
@@ -562,6 +604,11 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
             <span style={{ fontSize: '0.72rem', color: onlineUsers[otherUser.id] ? '#22c55e' : 'var(--text-muted)', fontWeight: 'normal' }}>
               {onlineUsers[otherUser.id] ? '● Online' : '○ Offline'}
             </span>
+            {reconnecting && (
+              <span style={{ fontSize: '0.72rem', color: '#f59e0b', fontWeight: 'normal' }}>
+                ⟳ Reconnecting...
+              </span>
+            )}
           </div>
         }
         messages={messages}

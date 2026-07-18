@@ -32,31 +32,59 @@ const App = () => {
   const [unreadCounts, setUnreadCounts] = useState({});
   const { flash, showFlash } = useFlash();
   const presenceSocketRef = useRef(null);
+  const [presenceReconnecting, setPresenceReconnecting] = useState(false);
 
   const connectPresence = useCallback((userId) => {
     const token = getAccessToken();
-    const socket = new WebSocket(`${WS_PRESENCE}/?token=${token}`);
-    presenceSocketRef.current = socket;
+    let reconnectTimer = null;
+    let retries = 0;
+    let closed = false;
 
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'online', user_id: userId }));
+    const connect = () => {
+      closed = false;
+      const socket = new WebSocket(`${WS_PRESENCE}/?token=${token}`);
+      presenceSocketRef.current = socket;
 
-    socket.onmessage = (e) => {
-      const data = JSON.parse(e.data);
-      if (data.type === 'presence') {
-        setOnlineUsers(prev => ({ ...prev, [data.user_id]: data.status === 'online' }));
-      }
-      if (data.type === 'presence_bulk') {
-        const bulk = {};
-        data.users?.forEach(u => { bulk[u.id] = u.is_online; });
-        setOnlineUsers(bulk);
-      }
-      if (data.type === 'unread_update') {
-        setUnreadCounts(prev => ({ ...prev, [data.from_user_id]: data.count }));
-      }
+      socket.onopen = () => {
+        retries = 0;
+        setPresenceReconnecting(false);
+        socket.send(JSON.stringify({ type: 'online', user_id: userId }));
+      };
+
+      socket.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if (data.type === 'presence') {
+          setOnlineUsers(prev => ({ ...prev, [data.user_id]: data.status === 'online' }));
+        }
+        if (data.type === 'presence_bulk') {
+          const bulk = {};
+          data.users?.forEach(u => { bulk[u.id] = u.is_online; });
+          setOnlineUsers(bulk);
+        }
+        if (data.type === 'unread_update') {
+          setUnreadCounts(prev => ({ ...prev, [data.from_user_id]: data.count }));
+        }
+      };
+
+      socket.onerror = () => { };
+
+      socket.onclose = () => {
+        if (closed) return;
+        const delay = Math.min(1000 * Math.pow(2, retries), 30000);
+        retries++;
+        setPresenceReconnecting(true);
+        reconnectTimer = setTimeout(connect, delay);
+      };
     };
 
-    socket.onerror = () => { };
-    return () => socket.close();
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      presenceSocketRef.current?.close();
+      presenceSocketRef.current = null;
+    };
   }, []);
 
   const uploadPublicKey = useCallback(async (publicKeyStr) => {
@@ -145,7 +173,6 @@ const App = () => {
   };
 
   const handleLogout = async () => {
-    presenceSocketRef.current?.close();
     try {
       await axios.post(`${API_BASE}/logout/`);
     } finally {
@@ -264,6 +291,11 @@ const App = () => {
           >⚙️</button>
           <button className="btn btn-secondary" onClick={handleLogout} style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', flexShrink: 0 }}>Logout</button>
         </div>
+        {presenceReconnecting && (
+          <div style={{ fontSize: '0.7rem', color: '#f59e0b', textAlign: 'center', padding: '0.15rem 0' }}>
+            ⟳ Reconnecting...
+          </div>
+        )}
       </div>
 
       <main className="main-content">
