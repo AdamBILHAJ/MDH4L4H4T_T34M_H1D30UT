@@ -62,7 +62,10 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group_name'):
-            await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+            try:
+                await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+            except Exception as e:
+                logger.warning(f"PrivateChatConsumer group_discard failed: {e}")
         await self.mark_user_offline()
 
     async def receive(self, text_data):
@@ -463,7 +466,10 @@ class GroupChatConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group_name'):
-            await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+            try:
+                await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+            except Exception as e:
+                logger.warning(f"GroupChatConsumer group_discard failed: {e}")
         await self.mark_user_offline()
 
     async def receive(self, text_data):
@@ -865,11 +871,18 @@ class PresenceConsumer(AsyncWebsocketConsumer):
     async def disconnect(self, code):
         if hasattr(self, 'user') and self.user:
             await set_user_online(self.user.id, False)
-            await self.channel_layer.group_send(
-                self.group,
-                {"type": "presence_update", "user_id": self.user.id, "status": "offline"}
-            )
-        await self.channel_layer.group_discard(self.group, self.channel_name)
+            try:
+                await self.channel_layer.group_send(
+                    self.group,
+                    {"type": "presence_update", "user_id": self.user.id, "status": "offline"}
+                )
+            except Exception as e:
+                logger.warning(f"PresenceConsumer group_send failed: {e}")
+        if hasattr(self, 'group'):
+            try:
+                await self.channel_layer.group_discard(self.group, self.channel_name)
+            except Exception as e:
+                logger.warning(f"PresenceConsumer group_discard failed: {e}")
 
     async def presence_update(self, event):
         await self.send(text_data=json.dumps({
