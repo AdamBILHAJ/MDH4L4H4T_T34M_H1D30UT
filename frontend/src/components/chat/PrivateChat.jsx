@@ -571,6 +571,7 @@ const PrivateChat = ({ user, otherUser, privateKey, allUsers, onlineUsers }) => 
             borderRadius: '12px',
             padding: '1.5rem',
             minWidth: '300px',
+            maxWidth: 'calc(100vw - 32px)',
             textAlign: 'center',
           }} onClick={e => e.stopPropagation()}>
             <h3 style={{ marginBottom: '1rem' }}>Delete message?</h3>

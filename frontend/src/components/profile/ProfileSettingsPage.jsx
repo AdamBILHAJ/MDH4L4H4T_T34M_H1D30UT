@@ -61,12 +61,12 @@ const ProfileSettingsPage = ({ user, onClose, onUserUpdated }) => {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '16px', width: '100%', maxWidth: '480px', maxHeight: '85vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', overflowY: 'auto', display: 'flex', flexDirection: 'column' }} className="settings-panel">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-color)', position: 'sticky', top: 0, background: 'var(--card-bg)', zIndex: 1 }}>
           <h2 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--accent-color)' }}>Account Settings</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1 }}>✕</button>
         </div>
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', padding: '0 1.5rem' }}>
+        <div className="settings-tabs" style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
           {['profile', 'password'].map((t) => (
             <button key={t} onClick={() => setTab(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: tab === t ? 'bold' : 'normal', color: tab === t ? 'var(--primary-color)' : 'var(--text-muted)', borderBottom: tab === t ? '2px solid var(--primary-color)' : '2px solid transparent', textTransform: 'capitalize' }}>
               {t === 'profile' ? 'Profile' : 'Password'}

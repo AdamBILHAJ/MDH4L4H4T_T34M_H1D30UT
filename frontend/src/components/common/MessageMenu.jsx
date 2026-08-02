@@ -9,6 +9,7 @@ const MessageMenu = ({ onReply, onDelete, isOwnMessage }) => {
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <button
         onClick={handleClick}
+        className="message-menu-btn"
         style={{
           background: 'none',
           border: 'none',

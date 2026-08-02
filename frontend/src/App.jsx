@@ -4,6 +4,7 @@ import './index.css';
 import { initializeKeys } from './crypto';
 import { getAccessToken, setAccessToken, clearAccessToken } from './tokenManager';
 import { useFlash } from './hooks/useFlash';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { DECORATIONS } from './constants/decorations';
 import Avatar from './components/common/Avatar';
 import Flash from './components/common/Flash';
@@ -28,6 +29,9 @@ const App = () => {
   const [activeGroupChat, setActiveGroupChat] = useState(false);
   const [privateKey, setPrivateKey] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
+  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
+  const isNarrowMobile = useMediaQuery('(max-width: 767px)');
   const [onlineUsers, setOnlineUsers] = useState({});
   const [unreadCounts, setUnreadCounts] = useState({});
   const { flash, showFlash } = useFlash();
@@ -190,10 +194,19 @@ const App = () => {
     setCurrentChannel(null);
     setActiveGroupChat(false);
     setUnreadCounts(prev => ({ ...prev, [otherUser.id]: 0 }));
+    setIsLeftDrawerOpen(false);
   };
 
-  const handleChannelClick = (ch) => { setCurrentChannel(ch); setActiveChat(null); setActiveGroupChat(false); };
-  const handleGroupChatClick = () => { setActiveGroupChat(true); setActiveChat(null); setCurrentChannel(null); };
+  const handleChannelClick = (ch) => { setCurrentChannel(ch); setActiveChat(null); setActiveGroupChat(false); setIsLeftDrawerOpen(false); };
+  const handleGroupChatClick = () => { setActiveGroupChat(true); setActiveChat(null); setCurrentChannel(null); setIsLeftDrawerOpen(false); };
+
+  const closeDrawers = () => { setIsLeftDrawerOpen(false); setIsRightDrawerOpen(false); };
+
+  const currentViewName = () => {
+    if (activeChat) return `@ ${activeChat.display_name || activeChat.username}`;
+    if (activeGroupChat) return '# everyone';
+    return `# ${currentChannel?.name || 'general'}`;
+  };
 
   if (!sessionChecked || appState === 'loading') {
     return (
@@ -206,7 +219,7 @@ const App = () => {
   if (appState === 'profile-setup') return <ProfileSetupPage user={user} onComplete={handleProfileSetupComplete} />;
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isLeftDrawerOpen || isRightDrawerOpen ? 'drawer-open' : ''}`}>
       <style>{`
         @keyframes typingBounce {
           0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
@@ -215,8 +228,24 @@ const App = () => {
         .self-entry:hover { background: transparent !important; cursor: default !important; }
       `}</style>
 
+      <div className={`drawer-backdrop ${isLeftDrawerOpen || isRightDrawerOpen ? 'active' : ''}`} onClick={closeDrawers} />
+
+      <header className="mobile-header">
+        <button
+          className="mobile-header-btn"
+          onClick={() => { setIsLeftDrawerOpen(!isLeftDrawerOpen); setIsRightDrawerOpen(false); }}
+          aria-label="Toggle channels"
+        >☰</button>
+        <span className="mobile-header-title">{currentViewName()}</span>
+        <button
+          className="mobile-header-btn"
+          onClick={() => { setIsRightDrawerOpen(!isRightDrawerOpen); setIsLeftDrawerOpen(false); }}
+          aria-label="Toggle members"
+        >👥</button>
+      </header>
+
       {flash && (
-        <div style={{ position: 'fixed', top: '1.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9999, minWidth: '300px' }}>
+        <div className="flash-toast" style={{ position: 'fixed', top: '1.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9999 }}>
           <Flash flash={flash} />
         </div>
       )}
@@ -225,7 +254,7 @@ const App = () => {
         <ProfileSettingsPage user={user} onClose={() => setShowSettings(false)} onUserUpdated={handleUserUpdated} />
       )}
 
-      <div className="sidebar">
+      <div className={`sidebar sidebar-left ${isLeftDrawerOpen ? 'open' : ''}`}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: '8px',
           padding: '0 0 1rem 0',
@@ -307,7 +336,7 @@ const App = () => {
           <>
             <div className="bg-decor">
               {DECORATIONS[currentChannel?.slug] || DECORATIONS.general}
-              {'\n' + (DECORATIONS[currentChannel?.slug] || DECORATIONS.general).repeat(5)}
+              {'\n' + (DECORATIONS[currentChannel?.slug] || DECORATIONS.general).repeat(isNarrowMobile ? 2 : 5)}
             </div>
             <div className="content-wrapper">
               <PostForm user={user} channel={currentChannel} onPostCreated={() => fetchPosts(currentChannel.slug)} showFlash={showFlash} />
@@ -325,7 +354,7 @@ const App = () => {
         )}
       </main>
 
-      <div className="sidebar" style={{ borderLeft: '1px solid var(--border-color)', borderRight: 'none' }}>
+      <div className={`sidebar sidebar-right ${isRightDrawerOpen ? 'open' : ''}`} style={{ borderLeft: '1px solid var(--border-color)', borderRight: 'none' }}>
         <h2 style={{ fontSize: '1rem' }}>Members</h2>
         <ul className="channel-list">
           {users.map((u) => {

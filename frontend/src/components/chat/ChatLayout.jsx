@@ -218,7 +218,8 @@ const ChatLayout = ({
             onChange={(e) => { setInput(e.target.value); }}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
-            style={{ flex: 1, padding: '0.6rem 1rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-color)', fontSize: '0.9rem' }}
+            className="composer-input"
+            style={{ flex: 1, minWidth: 0, padding: '0.6rem 1rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-color)', fontSize: '0.9rem' }}
           />
           <button className="btn" onClick={sendMessage} disabled={!input.trim()}>Send</button>
         </div>
