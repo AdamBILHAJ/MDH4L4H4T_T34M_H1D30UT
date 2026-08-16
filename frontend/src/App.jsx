@@ -130,6 +130,17 @@ const App = () => {
     }
   }, [appState, user]);
 
+  useEffect(() => {
+    if (isLeftDrawerOpen || isRightDrawerOpen || showSettings) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isLeftDrawerOpen, isRightDrawerOpen, showSettings]);
+
   const handleLoginSuccess = async (userData) => {
     setUser(userData);
     await initKeys(userData.id);

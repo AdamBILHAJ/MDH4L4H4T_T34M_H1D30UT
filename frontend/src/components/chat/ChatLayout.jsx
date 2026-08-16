@@ -52,19 +52,19 @@ const ChatLayout = ({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-      <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)', fontWeight: 'bold', fontSize: '1rem', color: 'var(--accent-color)', background: 'var(--sidebar-bg)', flexShrink: 0 }}>
+    <div className="chat-layout-container">
+      <div className="chat-layout-header">
         {header}
         {unreadCount > 0 && (
-          <span style={{ marginLeft: 8, background: 'var(--primary-color)', color: '#fff', borderRadius: '10px', padding: '1px 7px', fontSize: '0.7rem', verticalAlign: 'middle' }}>
+          <span className="chat-header-unread">
             {unreadCount} unread
           </span>
         )}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div className="chat-messages-scroll">
         {messages.length === 0 && (
-          <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '3rem' }}>No messages yet. Say hello!</div>
+          <div className="chat-empty-message">No messages yet. Say hello!</div>
         )}
         {messages.map((msg, i) => {
           const isMe = (msg.sender_id ?? msg.sender) === user.id;
@@ -74,51 +74,27 @@ const ChatLayout = ({
           const seenUsers = seenBy[msgId] || [];
 
           return (
-            <div key={msgId} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', marginBottom: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', flexDirection: isMe ? 'row-reverse' : 'row', maxWidth: '80%' }}>
+            <div key={msgId} className={`chat-message-row ${isMe ? 'me' : 'other'}`}>
+              <div className={`chat-message-bubble-wrapper ${isMe ? 'me' : 'other'}`}>
                 {(!isMe || isGroup) && senderUser && (
                   <Avatar user={senderUser} size={26} />
                 )}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', maxWidth: '100%' }}>
+                <div className={`chat-message-content-box ${isMe ? 'me' : 'other'}`}>
                   {isGroup && !isMe && (
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '2px', paddingLeft: '4px' }}>
+                    <span className="chat-sender-username">
                       {senderUser?.display_name || senderName}
                     </span>
                   )}
-                  <div style={{
-                    background: isMe ? 'var(--primary-color)' : 'var(--card-bg)',
-                    color: isMe ? '#fff' : 'var(--text-color)',
-                    padding: '8px 12px',
-                    borderRadius: isMe ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                    maxWidth: '100%',
-                    fontSize: '0.9rem',
-                    border: '1px solid var(--border-color)',
-                    wordBreak: 'break-word',
-                    whiteSpace: 'pre-wrap',
-                  }}>
+                  <div className={`chat-message-bubble ${isMe ? 'me' : 'other'}`}>
                     {/* Show quoted message if any */}
                     {msg.replied_message && (
-                      <div style={{
-                        background: 'rgba(0, 0, 0, 0.08)',
-                        borderLeft: '3px solid var(--primary-color)',
-                        padding: '4px 8px',
-                        marginBottom: '6px',
-                        borderRadius: '6px',
-                        opacity: 0.85,
-                      }}>
-                        <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>
+                      <div className="chat-quote-container">
+                        <div className="chat-quote-sender">
                           @{msg.replied_message.sender_username}
                         </div>
 
                         {msg.replied_message.file_url ? (
-                          <div style={{
-                            opacity: 0.65,
-                            filter: 'grayscale(20%)',
-                            pointerEvents: 'none',
-                            transform: 'scale(0.90)',
-                            transformOrigin: 'top left',
-                            maxWidth: '180px',
-                          }}>
+                          <div className="chat-quote-file-wrapper">
                             <FileMessage
                               fileUrl={msg.replied_message.file_url}
                               fileName={msg.replied_message.file_name}
@@ -126,7 +102,7 @@ const ChatLayout = ({
                             />
                           </div>
                         ) : (
-                          <div style={{ fontSize: '0.78rem', color: 'var(--text-color)' }}>
+                          <div className="chat-quote-text">
                             {(msg.replied_message.decrypted ?? msg.replied_message.content ?? '').substring(0, 80)}
                           </div>
                         )}
@@ -150,20 +126,20 @@ const ChatLayout = ({
                   )}
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px', paddingLeft: '4px', paddingRight: '4px', flexDirection: isMe ? 'row-reverse' : 'row' }}>
-                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              <div className={`chat-message-meta ${isMe ? 'me' : 'other'}`}>
+                <span className="chat-message-time">
                   {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                 </span>
                 {isMe && seenUsers.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                  <div className="chat-seen-list">
+                    <span className="chat-seen-label">
                       {seenUsers.length === 1 ? 'Seen' : `Seen by ${seenUsers.length}`}
                     </span>
                     {seenUsers.slice(0, 3).map((su, si) => (
                       <MiniAvatar key={su.id ?? si} user={su} size={14} />
                     ))}
                     {seenUsers.length > 3 && (
-                      <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginLeft: '2px' }}>
+                      <span className="chat-seen-plus">
                         +{seenUsers.length - 3}
                       </span>
                     )}
@@ -178,19 +154,10 @@ const ChatLayout = ({
 
       <TypingIndicator typingUsers={typingUsers} allUsers={allUsers} />
 
-      <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'var(--sidebar-bg)', flexShrink: 0 }}>
+      <div className="chat-composer">
         {/* "Replying to" banner */}
         {replyTo && (
-          <div style={{
-            background: 'var(--input-bg)',
-            borderLeft: '3px solid var(--primary-color)',
-            padding: '4px 8px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            fontSize: '0.75rem',
-            borderRadius: '4px',
-          }}>
+          <div className="chat-reply-banner">
             <span>
               Replying to <strong>@{replyTo.sender_username}</strong>
               {replyTo.file_url ? (
@@ -199,16 +166,14 @@ const ChatLayout = ({
                 <>: {(replyTo.decrypted || replyTo.content || '').substring(0, 55)}</>
               )}
             </span>
-            <button onClick={cancelReply} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
+            <button onClick={cancelReply} className="chat-reply-cancel">✕</button>
           </div>
         )}
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <div className="chat-composer-row">
           <button
             onClick={() => fileInputRef.current?.click()}
             title="Attach file (max 100MB)"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '1.2rem', padding: '4px', borderRadius: '6px', flexShrink: 0, transition: 'color 0.2s' }}
-            onMouseEnter={e => e.currentTarget.style.color = 'var(--primary-color)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+            className="chat-attach-btn"
           >📎</button>
           <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleFileChange} />
 
@@ -218,8 +183,7 @@ const ChatLayout = ({
             onChange={(e) => { setInput(e.target.value); }}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
-            className="composer-input"
-            style={{ flex: 1, minWidth: 0, padding: '0.6rem 1rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-color)', fontSize: '0.9rem' }}
+            className="chat-input"
           />
           <button className="btn" onClick={sendMessage} disabled={!input.trim()}>Send</button>
         </div>
