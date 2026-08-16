@@ -2,7 +2,7 @@ services:
   - type: web
     name: mdhalahat-backend
     runtime: python
-    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate
+    buildCommand: "pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate && python manage.py shell -c \"exec(open('seed_channels.py').read())\""
     startCommand: daphne -b 0.0.0.0 -p $PORT core.asgi:application
     plan: free
     envVars:
