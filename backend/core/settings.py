@@ -166,17 +166,18 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATICFILES_DIRS = [BASE_DIR / 'static']
 
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-
-# Media / File upload storage — Cloudflare R2 (S3-compatible) with local fallback
+# Media / File upload storage — Cloudflare R2 / Backblaze B2 (S3-compatible) with local fallback
 
 MEDIA_BUCKET = os.environ.get('MEDIA_BUCKET')
 MEDIA_ACCESS_KEY_ID = os.environ.get('MEDIA_ACCESS_KEY_ID')
 MEDIA_SECRET_ACCESS_KEY = os.environ.get('MEDIA_SECRET_ACCESS_KEY')
 MEDIA_ENDPOINT_URL = os.environ.get('MEDIA_ENDPOINT_URL')
 
-if MEDIA_BUCKET and MEDIA_ACCESS_KEY_ID and MEDIA_SECRET_ACCESS_KEY and MEDIA_ENDPOINT_URL:
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+_use_s3_media = bool(
+    MEDIA_BUCKET and MEDIA_ACCESS_KEY_ID and MEDIA_SECRET_ACCESS_KEY and MEDIA_ENDPOINT_URL
+)
+
+if _use_s3_media:
     AWS_S3_ENDPOINT_URL = MEDIA_ENDPOINT_URL
     AWS_ACCESS_KEY_ID = MEDIA_ACCESS_KEY_ID
     AWS_SECRET_ACCESS_KEY = MEDIA_SECRET_ACCESS_KEY
@@ -189,6 +190,15 @@ if MEDIA_BUCKET and MEDIA_ACCESS_KEY_ID and MEDIA_SECRET_ACCESS_KEY and MEDIA_EN
 else:
     MEDIA_URL = '/media/'
     MEDIA_ROOT = BASE_DIR / 'media'
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage' if _use_s3_media else 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 AUTH_USER_MODEL = 'api.User'
 
