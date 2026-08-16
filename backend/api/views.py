@@ -11,7 +11,7 @@ from django.core.exceptions import ValidationError
 from django.conf import settings
 
 from .models import Channel, Post, Reply
-from .serializers import ReplySerializer
+from .serializers import ChannelSerializer, ReplySerializer
 
 User = get_user_model()
 
@@ -254,24 +254,34 @@ class ChangePasswordView(views.APIView):
         return response
 
 
+DEFAULT_CHANNELS = [
+    ('General', 'general'),
+    ('Cryptography', 'crypto'),
+    ('Web Exploitation', 'web_exp'),
+    ('Forensics', 'forensics'),
+    ('Reverse Engineering', 'reverse'),
+    ('Pwn', 'pwn'),
+    ('Mobile', 'mobile'),
+    ('Linux', 'linux'),
+    ('Networking', 'networking'),
+    ('Web Development', 'web_dev'),
+    ('Threat Intelligence', 'threat_intel'),
+]
+
+
+def ensure_default_channels():
+    for name, slug in DEFAULT_CHANNELS:
+        Channel.objects.get_or_create(slug=slug, defaults={'name': name})
+
+
 class ChannelListView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        channels = [
-            {'id': 1, 'name': 'General', 'slug': 'general'},
-            {'id': 2, 'name': 'Crypto', 'slug': 'crypto'},
-            {'id': 3, 'name': 'Web Exp', 'slug': 'web_exp'},
-            {'id': 4, 'name': 'Forensics', 'slug': 'forensics'},
-            {'id': 5, 'name': 'Reverse', 'slug': 'reverse'},
-            {'id': 6, 'name': 'Pwn', 'slug': 'pwn'},
-            {'id': 7, 'name': 'Mobile', 'slug': 'mobile'},
-            {'id': 8, 'name': 'Linux', 'slug': 'linux'},
-            {'id': 9, 'name': 'Networking', 'slug': 'networking'},
-            {'id': 10, 'name': 'Web Dev', 'slug': 'web_dev'},
-            {'id': 11, 'name': 'Threat Intel', 'slug': 'threat_intel'},
-        ]
-        return Response(channels)
+        if not Channel.objects.exists():
+            ensure_default_channels()
+        channels = Channel.objects.all()
+        return Response(ChannelSerializer(channels, many=True).data)
 
 
 # api/views.py — replace PostListView and PostCreateView

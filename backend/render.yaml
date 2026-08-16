@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: mdhalahat-backend
+    runtime: python
+    buildCommand: "pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate && python manage.py shell -c \"exec(open('seed_channels.py').read())\""
+    startCommand: daphne -b 0.0.0.0 -p $PORT core.asgi:application
+    plan: free
+    envVars:
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: MEDIA_BUCKET
+        sync: false
+      - key: MEDIA_ACCESS_KEY_ID
+        sync: false
+      - key: MEDIA_SECRET_ACCESS_KEY
+        sync: false
+      - key: MEDIA_ENDPOINT_URL
+        sync: false

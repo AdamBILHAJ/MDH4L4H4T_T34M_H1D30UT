@@ -9,7 +9,7 @@ const FileMessage = ({ fileUrl, fileName, fileType }) => {
     return (
       <a href={fullUrl} target="_blank" rel="noreferrer">
         <img src={fullUrl} alt={fileName} style={{
-          maxWidth: '220px', maxHeight: '200px', borderRadius: '8px',
+          maxWidth: 'min(280px, 70vw)', maxHeight: '200px', borderRadius: '8px',
           marginTop: '6px', display: 'block', objectFit: 'cover',
           border: '1px solid var(--border-color)',
         }} />
@@ -18,7 +18,7 @@ const FileMessage = ({ fileUrl, fileName, fileType }) => {
   }
   if (isVideo) {
     return (
-      <video controls style={{ maxWidth: '280px', marginTop: '6px', borderRadius: '8px', display: 'block' }}>
+      <video controls style={{ maxWidth: 'min(400px, 70vw)', marginTop: '6px', borderRadius: '8px', display: 'block' }}>
         <source src={fullUrl} />
       </video>
     );

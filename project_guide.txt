@@ -1,0 +1,93 @@
+ Launch Guide: React (Vite) + Django (Daphne/ASGI)
+1. Project Structure Overview
+mdhalahat_server/
+├── backend/                  # Django project
+│   ├── core/
+│   │   ├── asgi.py           # ASGI app w/ Channels (HTTP + WebSocket)
+│   │   ├── settings.py       # CORS, Channels, REST Framework
+│   │   └── urls.py
+│   ├── api/                  # REST API app
+│   ├── chat/                 # WebSocket chat app (DM, Group, Presence)
+│   │   └── routing.py        # ws/dm/, ws/group/, ws/presence/
+│   ├── manage.py
+│   └── db.sqlite3
+├── frontend/                 # React + Vite
+│   ├── src/
+│   │   └── App.jsx           # axios → http://<host>:8000/api
+│   │                         # ws      → ws://<host>:8000/ws/...
+│   ├── package.json
+│   └── vite.config.js
+└── venv/                     # Python virtual env (Daphne 4.2.1, Channels 4.3.2, Django 6.0.3)
+2. Frontend → Backend Connection
+From frontend/src/App.jsx:20-23:
+
+const API_BASE    = `http://${backendHost}:8000/api`;      // REST
+const WS_BASE     = `ws://${backendHost}:8000/ws/dm`;      // DM WebSocket
+const WS_GROUP    = `ws://${backendHost}:8000/ws/group`;   // Group WebSocket
+const WS_PRESENCE = `ws://${backendHost}:8000/ws/presence`; // Presence WebSocket
+Your frontend already targets port 8000 on the same host. Environment variable overrides (VITE_API_BASE, VITE_WS_BASE, etc.) are supported if needed.
+
+3. Step-by-Step Launch Commands
+Step A — Activate Python venv & start Daphne (Backend on port 8000)
+Open PowerShell (as admin if needed) at the project root:
+
+# 1. Activate the virtual environment
+.\venv\Scripts\Activate.ps1
+
+# 2. (Optional) Migrate if schema has changed
+python .\backend\manage.py migrate
+
+# 3. Start Daphne (ASGI server on port 8000)
+daphne -p 8000 -b 0.0.0.0 core.asgi:application
+
+ 
+Run from: C:\Users\ADAM BELHADJ\Desktop\mdhalahat_server\
+
+Daphne will serve both HTTP REST APIs and WebSocket endpoints.
+
+Step B — Start React dev server (Frontend)
+Open a second terminal (PowerShell or cmd) — keep the first one running:
+
+# 1. Navigate to the frontend directory
+cd .\frontend
+
+# 2. Install dependencies (skip if node_modules already exists)
+npm install
+
+# 3. Start Vite dev server
+npm run dev
+Vite defaults to port 5173. The frontend will be available at http://localhost:5173.
+
+4. CORS & Integration Checklist
+Your settings.py already has these correct values — verify they are still present:
+
+Setting	Current Value	OK?
+ALLOWED_HOSTS	['*']	✅
+CORS_ALLOWED_ORIGINS	includes http://localhost:5173, 127.0.0.1:5173	✅
+CORS_ALLOW_ALL_ORIGINS	True	✅ (fallback, overrides list)
+CORS_ALLOW_CREDENTIALS	True	✅
+CSRF_TRUSTED_ORIGINS	includes http://localhost:5173	✅
+CORS_ALLOW_HEADERS	authorization, content-type, x-csrftoken	✅
+CHANNEL_LAYERS	InMemoryChannelLayer	✅ (fine for dev)
+Frontend vite.config.js	No proxy configured	⚠️ Not needed — frontend calls port 8000 directly
+No package.json proxy field or Vite proxy is needed because App.jsx constructs the full URL to localhost:8000 directly.
+
+Environment variables you can set (optional overrides):
+# In PowerShell before npm run dev:
+$env:VITE_API_BASE = "http://localhost:8000/api"
+$env:VITE_WS_BASE = "ws://localhost:8000/ws/dm"
+5. Quick Start (one-liner, in order)
+# Terminal 1 — Django/Daphne
+.\venv\Scripts\Activate.ps1
+daphne -p 8000 -b 0.0.0.0 core.asgi:application
+
+# Terminal 2 — React/Vite
+cd frontend
+npm run dev
+Then open http://localhost:5173 in your browser.
+
+6. Troubleshooting Notes
+Daphne not recognized: Make sure you activated the venv first (Activate.ps1). Daphne executable lives at venv\Scripts\daphne.exe.
+CORS error in browser console: Confirm the frontend's window.location.hostname resolves to one of the CORS_ALLOWED_ORIGINS. With CORS_ALLOW_ALL_ORIGINS = True this should not be an issue.
+WebSocket connection fails: Ensure Daphne (not runserver) is running — only Daphne handles the ProtocolTypeRouter in asgi.py properly.
+The asgi.py has duplicated code blocks (lines 1–26, 27–40, 41–56). The last block (lines 41–56) is the effective one — the earlier duplicates are harmless since they get overwritten, but you may want to clean them up.

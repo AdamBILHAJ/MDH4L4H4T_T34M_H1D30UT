@@ -4,6 +4,7 @@ import './index.css';
 import { initializeKeys } from './crypto';
 import { getAccessToken, setAccessToken, clearAccessToken } from './tokenManager';
 import { useFlash } from './hooks/useFlash';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { DECORATIONS } from './constants/decorations';
 import Avatar from './components/common/Avatar';
 import Flash from './components/common/Flash';
@@ -28,35 +29,66 @@ const App = () => {
   const [activeGroupChat, setActiveGroupChat] = useState(false);
   const [privateKey, setPrivateKey] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
+  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
+  const isNarrowMobile = useMediaQuery('(max-width: 767px)');
   const [onlineUsers, setOnlineUsers] = useState({});
   const [unreadCounts, setUnreadCounts] = useState({});
   const { flash, showFlash } = useFlash();
   const presenceSocketRef = useRef(null);
+  const [presenceReconnecting, setPresenceReconnecting] = useState(false);
 
   const connectPresence = useCallback((userId) => {
     const token = getAccessToken();
-    const socket = new WebSocket(`${WS_PRESENCE}/?token=${token}`);
-    presenceSocketRef.current = socket;
+    let reconnectTimer = null;
+    let retries = 0;
+    let closed = false;
 
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'online', user_id: userId }));
+    const connect = () => {
+      closed = false;
+      const socket = new WebSocket(`${WS_PRESENCE}/?token=${token}`);
+      presenceSocketRef.current = socket;
 
-    socket.onmessage = (e) => {
-      const data = JSON.parse(e.data);
-      if (data.type === 'presence') {
-        setOnlineUsers(prev => ({ ...prev, [data.user_id]: data.status === 'online' }));
-      }
-      if (data.type === 'presence_bulk') {
-        const bulk = {};
-        data.users?.forEach(u => { bulk[u.id] = u.is_online; });
-        setOnlineUsers(bulk);
-      }
-      if (data.type === 'unread_update') {
-        setUnreadCounts(prev => ({ ...prev, [data.from_user_id]: data.count }));
-      }
+      socket.onopen = () => {
+        retries = 0;
+        setPresenceReconnecting(false);
+        socket.send(JSON.stringify({ type: 'online', user_id: userId }));
+      };
+
+      socket.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if (data.type === 'presence') {
+          setOnlineUsers(prev => ({ ...prev, [data.user_id]: data.status === 'online' }));
+        }
+        if (data.type === 'presence_bulk') {
+          const bulk = {};
+          data.users?.forEach(u => { bulk[u.id] = u.is_online; });
+          setOnlineUsers(bulk);
+        }
+        if (data.type === 'unread_update') {
+          setUnreadCounts(prev => ({ ...prev, [data.from_user_id]: data.count }));
+        }
+      };
+
+      socket.onerror = () => { };
+
+      socket.onclose = () => {
+        if (closed) return;
+        const delay = Math.min(1000 * Math.pow(2, retries), 30000);
+        retries++;
+        setPresenceReconnecting(true);
+        reconnectTimer = setTimeout(connect, delay);
+      };
     };
 
-    socket.onerror = () => { };
-    return () => socket.close();
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      presenceSocketRef.current?.close();
+      presenceSocketRef.current = null;
+    };
   }, []);
 
   const uploadPublicKey = useCallback(async (publicKeyStr) => {
@@ -97,6 +129,17 @@ const App = () => {
       return cleanup;
     }
   }, [appState, user]);
+
+  useEffect(() => {
+    if (isLeftDrawerOpen || isRightDrawerOpen || showSettings) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isLeftDrawerOpen, isRightDrawerOpen, showSettings]);
 
   const handleLoginSuccess = async (userData) => {
     setUser(userData);
@@ -145,7 +188,6 @@ const App = () => {
   };
 
   const handleLogout = async () => {
-    presenceSocketRef.current?.close();
     try {
       await axios.post(`${API_BASE}/logout/`);
     } finally {
@@ -163,10 +205,19 @@ const App = () => {
     setCurrentChannel(null);
     setActiveGroupChat(false);
     setUnreadCounts(prev => ({ ...prev, [otherUser.id]: 0 }));
+    setIsLeftDrawerOpen(false);
   };
 
-  const handleChannelClick = (ch) => { setCurrentChannel(ch); setActiveChat(null); setActiveGroupChat(false); };
-  const handleGroupChatClick = () => { setActiveGroupChat(true); setActiveChat(null); setCurrentChannel(null); };
+  const handleChannelClick = (ch) => { setCurrentChannel(ch); setActiveChat(null); setActiveGroupChat(false); setIsLeftDrawerOpen(false); };
+  const handleGroupChatClick = () => { setActiveGroupChat(true); setActiveChat(null); setCurrentChannel(null); setIsLeftDrawerOpen(false); };
+
+  const closeDrawers = () => { setIsLeftDrawerOpen(false); setIsRightDrawerOpen(false); };
+
+  const currentViewName = () => {
+    if (activeChat) return `@ ${activeChat.display_name || activeChat.username}`;
+    if (activeGroupChat) return '# everyone';
+    return `# ${currentChannel?.name || 'general'}`;
+  };
 
   if (!sessionChecked || appState === 'loading') {
     return (
@@ -179,7 +230,7 @@ const App = () => {
   if (appState === 'profile-setup') return <ProfileSetupPage user={user} onComplete={handleProfileSetupComplete} />;
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isLeftDrawerOpen || isRightDrawerOpen ? 'drawer-open' : ''}`}>
       <style>{`
         @keyframes typingBounce {
           0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
@@ -188,8 +239,24 @@ const App = () => {
         .self-entry:hover { background: transparent !important; cursor: default !important; }
       `}</style>
 
+      <div className={`drawer-backdrop ${isLeftDrawerOpen || isRightDrawerOpen ? 'active' : ''}`} onClick={closeDrawers} />
+
+      <header className="mobile-header">
+        <button
+          className="mobile-header-btn"
+          onClick={() => { setIsLeftDrawerOpen(!isLeftDrawerOpen); setIsRightDrawerOpen(false); }}
+          aria-label="Toggle channels"
+        >☰</button>
+        <span className="mobile-header-title">{currentViewName()}</span>
+        <button
+          className="mobile-header-btn"
+          onClick={() => { setIsRightDrawerOpen(!isRightDrawerOpen); setIsLeftDrawerOpen(false); }}
+          aria-label="Toggle members"
+        >👥</button>
+      </header>
+
       {flash && (
-        <div style={{ position: 'fixed', top: '1.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9999, minWidth: '300px' }}>
+        <div className="flash-toast" style={{ position: 'fixed', top: '1.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 9999 }}>
           <Flash flash={flash} />
         </div>
       )}
@@ -198,7 +265,7 @@ const App = () => {
         <ProfileSettingsPage user={user} onClose={() => setShowSettings(false)} onUserUpdated={handleUserUpdated} />
       )}
 
-      <div className="sidebar">
+      <div className={`sidebar sidebar-left ${isLeftDrawerOpen ? 'open' : ''}`}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: '8px',
           padding: '0 0 1rem 0',
@@ -264,6 +331,11 @@ const App = () => {
           >⚙️</button>
           <button className="btn btn-secondary" onClick={handleLogout} style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', flexShrink: 0 }}>Logout</button>
         </div>
+        {presenceReconnecting && (
+          <div style={{ fontSize: '0.7rem', color: '#f59e0b', textAlign: 'center', padding: '0.15rem 0' }}>
+            ⟳ Reconnecting...
+          </div>
+        )}
       </div>
 
       <main className="main-content">
@@ -275,7 +347,7 @@ const App = () => {
           <>
             <div className="bg-decor">
               {DECORATIONS[currentChannel?.slug] || DECORATIONS.general}
-              {'\n' + (DECORATIONS[currentChannel?.slug] || DECORATIONS.general).repeat(5)}
+              {'\n' + (DECORATIONS[currentChannel?.slug] || DECORATIONS.general).repeat(isNarrowMobile ? 2 : 5)}
             </div>
             <div className="content-wrapper">
               <PostForm user={user} channel={currentChannel} onPostCreated={() => fetchPosts(currentChannel.slug)} showFlash={showFlash} />
@@ -293,7 +365,7 @@ const App = () => {
         )}
       </main>
 
-      <div className="sidebar" style={{ borderLeft: '1px solid var(--border-color)', borderRight: 'none' }}>
+      <div className={`sidebar sidebar-right ${isRightDrawerOpen ? 'open' : ''}`} style={{ borderLeft: '1px solid var(--border-color)', borderRight: 'none' }}>
         <h2 style={{ fontSize: '1rem' }}>Members</h2>
         <ul className="channel-list">
           {users.map((u) => {
